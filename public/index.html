@@ -1,0 +1,245 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Fish Tank Control</title>
+  <style>
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      margin: 16px;
+    }
+
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 12px 0;
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .col {
+      flex: 1 1 280px;
+    }
+
+    label {
+      display: block;
+      margin: 8px 0 4px;
+    }
+
+    input[type="number"],
+    input[type="time"] {
+      width: 100%;
+      padding: 8px;
+    }
+
+    button {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid #888;
+      cursor: pointer;
+    }
+
+    .on {
+      background: #c7ffd8;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>🐟 Fish Tank Dashboard</h1>
+
+  <div class="row">
+    <div class="col card">
+      <h3>Live Sensors</h3>
+      <div>Temp: <span id="temp">-</span> °C</div>
+      <div>Humidity: <span id="hum">-</span> %</div>
+      <div>Distance: <span id="dist">-</span> cm</div>
+      <div>Light: <span id="light">-</span></div>
+      <div>Water: <span id="water">-</span></div>
+      <div>Light State: <span id="stateLight">-</span></div>
+      <div>Pump State: <span id="statePump">-</span></div>
+    </div>
+
+    <div class="col card">
+      <h3>Manual Controls</h3>
+      <button id="btnLight">Toggle Light</button>
+      <button id="btnPump">Toggle Pump</button>
+      <button id="btnBuzz">Toggle Buzzer</button>
+      <button id="btnFeed">Feed Now</button>
+    </div>
+
+    <div class="col card">
+      <h3>Automations</h3>
+      <label><input type="checkbox" id="autoLightPresence"> Light: Presence</label>
+      <label><input type="checkbox" id="autoLightLow"> Light: Low Ambient</label>
+      <label><input type="checkbox" id="autoPumpPresence"> Pump: Presence</label>
+      <label><input type="checkbox" id="autoPumpHourly"> Pump: Hourly</label>
+      <label>Max Pump On (sec)<input type="number" id="maxPump" min="10" value="300"></label>
+      <button id="saveAuto">Save</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col card">
+      <h3>Thresholds</h3>
+      <label>Proximity (cm)<input type="number" id="thProx" value="20"></label>
+      <label>Low Light ADC<input type="number" id="thLightLow" value="1200"></label>
+      <label>Water Low ADC<input type="number" id="thWaterLow" value="1000"></label>
+      <label>Temp High (°C)<input type="number" id="thTemp" value="32"></label>
+      <button id="saveThresh">Save Thresholds</button>
+    </div>
+
+    <div class="col card">
+      <h3>Feeding</h3>
+      <label>Enable <input type="checkbox" id="feedEnable"></label>
+      <label>Time 1<input type="time" id="feed1" value="09:00"></label>
+      <label>Time 2<input type="time" id="feed2" value="18:00"></label>
+      <div>Last Feed: <span id="lastFeed">-</span></div>
+      <button id="saveFeed">Save Feeding</button>
+    </div>
+
+    <div class="col card">
+      <h3>Alerts</h3>
+      <label>Buzzer Enabled <input type="checkbox" id="buzzEnable" checked></label>
+      <label>Silence Water Alert <input type="checkbox" id="silenceWater"></label>
+      <button id="saveBuzzer">Save Alerts</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, onValue, set, update, get, child } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+    // ---- Paste your own values (databaseURL is REQUIRED for RTDB) ----
+    // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+    const firebaseConfig = {
+      apiKey: "AIzaSyCPokWLKrM-JbJgQL0vVDccdR-qrmAHQ_Q",
+      authDomain: "fishtank-system.firebaseapp.com",
+      databaseURL: "https://fishtank-system-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "fishtank-system",
+      storageBucket: "fishtank-system.firebasestorage.app",
+      messagingSenderId: "333858962529",
+      appId: "1:333858962529:web:87ea50878e00d4bdd8be20",
+      measurementId: "G-67L85BD3S8"
+    };
+
+    const app = initializeApp(firebaseConfig);
+
+    // Ensure we're authenticated (works with rules that require auth)
+    const auth = getAuth(app);
+    await signInAnonymously(auth);
+
+    const db = getDatabase(app);
+    const $ = id => document.getElementById(id);
+
+    // --- Live sensors ---
+    onValue(ref(db, "sensors"), snap => {
+      const v = snap.val() || {};
+      $("temp").textContent = v.temperature ?? "-";
+      $("hum").textContent = v.humidity ?? "-";
+      $("dist").textContent = v.distance ?? "-";
+      $("light").textContent = v.lightLevel ?? "-";
+      $("water").textContent = v.waterLevel ?? "-";
+    });
+
+    onValue(ref(db, "state"), snap => {
+      const v = snap.val() || {};
+      $("stateLight").textContent = v.light_on ? "ON" : "OFF";
+      $("statePump").textContent = v.pump_on ? "ON" : "OFF";
+    });
+
+    // --- Load config -> UI ---
+    async function loadConfig() {
+      const s = await get(child(ref(db), "config"));
+      const c = s.val() || {};
+      $("autoLightPresence").checked = !!c.light?.auto_presence;
+      $("autoLightLow").checked = !!c.light?.auto_low_light;
+      $("autoPumpPresence").checked = !!c.pump?.auto_presence;
+      $("autoPumpHourly").checked = !!c.pump?.auto_hourly;
+      $("maxPump").value = c.pump?.max_on_seconds ?? 300;
+
+      $("thProx").value = c.thresholds?.proximity_cm ?? 20;
+      $("thLightLow").value = c.thresholds?.light_low ?? 1200;
+      $("thWaterLow").value = c.thresholds?.water_low ?? 1000;
+      $("thTemp").value = c.thresholds?.temp_high_c ?? 32;
+
+      $("feedEnable").checked = !!c.feeding?.enable;
+      $("feed1").value = c.feeding?.times?.[0] ?? "09:00";
+      $("feed2").value = c.feeding?.times?.[1] ?? "18:00";
+      $("lastFeed").textContent = c.feeding?.last_feed_iso ?? "-";
+
+      $("buzzEnable").checked = !!c.buzzer?.enable;
+      $("silenceWater").checked = !!c.buzzer?.silence_water_alert;
+    }
+    loadConfig();
+
+    // --- Manual controls ---
+    $("btnLight").onclick = async () => {
+      const s = await get(child(ref(db), "state/light_on"));
+      const on = s.val() ? 0 : 1;
+      await set(ref(db, "controls/light"), on);
+    };
+    $("btnPump").onclick = async () => {
+      const s = await get(child(ref(db), "state/pump_on"));
+      const on = s.val() ? 0 : 1;
+      await set(ref(db, "controls/pump"), on);
+    };
+    $("btnBuzz").onclick = async () => {
+      const s = await get(child(ref(db), "controls/buzzer"));
+      const on = s.val() ? 0 : 1;
+      await set(ref(db, "controls/buzzer"), on);
+    };
+    $("btnFeed").onclick = async () => {
+      await set(ref(db, "config/feeding/manual_feed_request"), 1);
+    };
+
+    // --- Save automations ---
+    $("saveAuto").onclick = async () => {
+      await update(ref(db, "config"), {
+        "light/auto_presence": $("autoLightPresence").checked ? 1 : 0,
+        "light/auto_low_light": $("autoLightLow").checked ? 1 : 0,
+        "pump/auto_presence": $("autoPumpPresence").checked ? 1 : 0,
+        "pump/auto_hourly": $("autoPumpHourly").checked ? 1 : 0,
+        "pump/max_on_seconds": parseInt($("maxPump").value || "300", 10)
+      });
+      alert("Automations saved");
+    };
+
+    $("saveThresh").onclick = async () => {
+      await update(ref(db, "config/thresholds"), {
+        proximity_cm: parseInt($("thProx").value, 10),
+        light_low: parseInt($("thLightLow").value, 10),
+        water_low: parseInt($("thWaterLow").value, 10),
+        temp_high_c: parseInt($("thTemp").value, 10)
+      });
+      alert("Thresholds saved");
+    };
+
+    $("saveFeed").onclick = async () => {
+      await update(ref(db, "config/feeding"), {
+        enable: $("feedEnable").checked ? 1 : 0,
+        "times/0": $("feed1").value,
+        "times/1": $("feed2").value
+      });
+      alert("Feeding settings saved");
+    };
+
+    $("saveBuzzer").onclick = async () => {
+      await update(ref(db, "config/buzzer"), {
+        enable: $("buzzEnable").checked ? 1 : 0,
+        silence_water_alert: $("silenceWater").checked ? 1 : 0
+      });
+      alert("Buzzer settings saved");
+    };
+  </script>
+</body>
+
+</html>
