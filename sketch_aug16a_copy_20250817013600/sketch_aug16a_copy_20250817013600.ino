@@ -1,10 +1,10 @@
 /*******************************
- * Smart Fish Tank – ESP32 Firmware (Optimized)
- * Changes vs previous:
- *  - Water level sensor: REMOVED (no pin, no reads, no OLED/display, no RTDB/logs)
- *  - Buzzer alarms: REMOVED (no temp/water alerts, no silence, no buzzer commands)
- *  - Buzzer now beeps ONLY during feeding (manual/scheduled)
- *  - States/RTDB no longer include buzzer fieldsok
+ * Smart Fish Tank – ESP32 Firmware (with Buzzer Feed-Only mode)
+ * - Sensors: DHT11, Ultrasonic, LDR (ADC), Water level (ADC)
+ * - Actuators: Light relay, Pump relay (active LOW), Buzzer, Servo feeder, OLED
+ * - Rules: presence, low-light, hourly pump; buzzer alerts; scheduled feeding
+ * - Firebase RTDB sync: sensors, states, commands, settings, logs
+ * - Offline-safe automation if Wi-Fi drops
  *******************************/
 
 #include <WiFi.h>
@@ -37,6 +37,7 @@ static const int DST_OFFSET_SEC = 0;
 #define PIN_US_ECHO 18 // Level shift to 3.3V if sensor is 5V!
 
 #define PIN_LDR 32       // ADC
+#define PIN_WATER 33     // ADC
 #define PIN_SPARE_ADC 34 // Not used
 
 #define PIN_LIGHT_RELAY 5 // Active LOW
@@ -63,11 +64,11 @@ FirebaseConfig configFB;
 
 // Current readings
 float gTempC = NAN, gHum = NAN;
-int gLightADC = 0;
+int gLightADC = 0, gWaterADC = 0;
 int gProximity = 9999; // cm
 
 // Relay/buzzer states (true = ON)
-bool lightOn = false, pumpOn = false, buzzerOn = false; // buzzerOn used only during short feed beep
+bool lightOn = false, pumpOn = false, buzzerOn = false;
 
 // Modes
 enum Mode
@@ -78,27 +79,49 @@ enum Mode
 };
 Mode lightMode = MODE_AUTO, pumpMode = MODE_AUTO;
 
+// ---- Buzzer mode (defined BEFORE use) ----
+enum BuzzerMode
+{
+  BUZZER_NORMAL,
+  BUZZER_FEED_ONLY
+};
+BuzzerMode buzzerMode = BUZZER_NORMAL;
+
+String buzzerModeToStr(BuzzerMode m) { return (m == BUZZER_FEED_ONLY) ? "feed_only" : "normal"; }
+BuzzerMode strToBuzzerMode(const String &s)
+{
+  String a = s;
+  a.toLowerCase();
+  return (a == "feed_only") ? BUZZER_FEED_ONLY : BUZZER_NORMAL;
+}
+
 // Settings (defaults; will be overwritten from RTDB /settings)
 struct
 {
   bool presenceRuleEnabled = true;
   bool lowLightRuleEnabled = true;
-
   struct
   {
     bool enabled = true;
     int seconds = 25; // runtime per hour
   } hourlyPump;
-
-  // Thresholds (water + high_temp removed)
+  // Thresholds
   int proximity_cm = 20;
-  int low_light_adc = 1700; // adjust to your LDR divider
+  int low_light_adc = 1700; // adjust based on your LDR divider
+  int water_low_adc = 1200; // higher/lower depends on your probe
+  float high_temp_c = 32.0;
 
   // Feeding
   bool feedingEnabled = true;
   String feedTime1 = "08:00";
   String feedTime2 = "20:00";
+
+  // Buzzer
+  bool alertsEnabled = true;
 } settings;
+
+// Buzzer silence window (epoch seconds)
+time_t buzzerSilencedUntil = 0;
 
 // Timers
 unsigned long tSensors = 0;
@@ -183,8 +206,9 @@ void beepMs(uint16_t ms)
 
 void feederDispense()
 {
-  // Short beep ONLY when feeding
-  beepMs(200);
+  // Short beep only in Feed-Only mode to indicate feeding
+  if (buzzerMode == BUZZER_FEED_ONLY)
+    beepMs(200);
 
   // Simple 0->90->0 sweep
   feeder.write(90);
@@ -269,8 +293,10 @@ void pushStates()
   FirebaseJson json;
   json.add("light_on", lightOn);
   json.add("pump_on", pumpOn);
+  json.add("buzzer_on", buzzerOn);
   json.add("light_mode", modeToStr(lightMode));
   json.add("pump_mode", modeToStr(pumpMode));
+  json.add("buzzer_mode", buzzerModeToStr(buzzerMode)); // include mode
   Firebase.RTDB.updateNode(&fbdo, PATH_STATES, &json);
 }
 
@@ -282,6 +308,7 @@ void pushSensors()
   j.add("temperature_c", gTempC);
   j.add("humidity_pct", gHum);
   j.add("light_adc", gLightADC);
+  j.add("water_adc", gWaterADC);
   j.add("proximity_cm", gProximity);
   j.add("last_update", (int)time(nullptr));
   Firebase.RTDB.updateNode(&fbdo, PATH_SENSORS, &j);
@@ -306,7 +333,7 @@ void logSensors()
   String ts = String((int)now);
   String path = String(PATH_LOGS) + "/" + date + "/" + ts;
   FirebaseJson j;
-  j.add("tC", gTempC).add("h", gHum).add("ldr", gLightADC).add("prox_cm", gProximity);
+  j.add("tC", gTempC).add("h", gHum).add("ldr", gLightADC).add("water", gWaterADC).add("prox_cm", gProximity);
   Firebase.RTDB.setJSON(&fbdo, path.c_str(), &j);
 }
 
@@ -381,6 +408,10 @@ void fetchSettings()
       settings.proximity_cm = i;
     if (jsonGetInt(j, "thresholds/low_light_adc", i))
       settings.low_light_adc = i;
+    if (jsonGetInt(j, "thresholds/water_low_adc", i))
+      settings.water_low_adc = i;
+    if (jsonGetFloat(j, "thresholds/high_temp_c", f))
+      settings.high_temp_c = f;
 
     if (jsonGetBool(j, "feeding/enabled", b))
       settings.feedingEnabled = b;
@@ -389,11 +420,17 @@ void fetchSettings()
     if (jsonGetString(j, "feeding/time2", s))
       settings.feedTime2 = s;
 
-    // Light/Pump default modes (optional)
+    if (jsonGetBool(j, "buzzer/alerts_enabled", b))
+      settings.alertsEnabled = b;
+
     if (jsonGetString(j, "light_mode", s))
       lightMode = strToMode(s);
     if (jsonGetString(j, "pump_mode", s))
       pumpMode = strToMode(s);
+
+    // Optional default buzzer mode from settings
+    if (jsonGetString(j, "buzzer/mode", s))
+      buzzerMode = strToBuzzerMode(s);
   }
 }
 
@@ -410,6 +447,7 @@ void applyCommandsSnapshot()
 
     String s;
     bool b;
+    int i;
 
     if (jsonGetString(j, "light_mode", s))
       lightMode = strToMode(s);
@@ -420,6 +458,27 @@ void applyCommandsSnapshot()
       pumpMode = strToMode(s);
     if (jsonGetBool(j, "pump_manual_state", b) && pumpMode == MODE_MANUAL)
       setPump(b);
+
+    // NEW: buzzer mode command
+    if (jsonGetString(j, "buzzer_mode", s))
+      buzzerMode = strToBuzzerMode(s);
+
+    if (jsonGetBool(j, "buzzer_toggle", b) && b)
+    {
+      setBuzzer(!buzzerOn);
+      FirebaseJson ack;
+      ack.add("buzzer_toggle", false);
+      Firebase.RTDB.updateNode(&fbdo, PATH_COMMANDS, &ack);
+    }
+
+    if (jsonGetInt(j, "buzzer_silence_minutes", i) && i > 0)
+    {
+      time_t now = time(nullptr);
+      buzzerSilencedUntil = now + i * 60;
+      FirebaseJson ack;
+      ack.add("buzzer_silence_minutes", 0);
+      Firebase.RTDB.updateNode(&fbdo, PATH_COMMANDS, &ack);
+    }
 
     if (jsonGetBool(j, "feed_now", b) && b)
     {
@@ -440,6 +499,7 @@ void streamCallback(FirebaseStream data)
 {
   if (data.dataTypeEnum() == fb_esp_rtdb_data_type_json)
   {
+    // Simple approach: just apply latest commands
     applyCommandsSnapshot();
   }
 }
@@ -459,16 +519,19 @@ void drawOLED()
   display.print(isnan(gHum) ? 0 : gHum, 0);
   display.println("%");
 
-  display.setCursor(0, 12);
+  display.setCursor(0, 10);
   display.print("LDR:");
   display.print(gLightADC);
+  display.setCursor(64, 10);
+  display.print("Water:");
+  display.print(gWaterADC);
 
-  display.setCursor(64, 12);
+  display.setCursor(0, 20);
   display.print("Prox: ");
   display.print(gProximity);
-  display.print("cm");
+  display.println("cm");
 
-  display.setCursor(0, 28);
+  display.setCursor(0, 30);
   display.print("Light:");
   display.print(lightOn ? "ON " : "OFF");
   display.print(" (");
@@ -481,6 +544,10 @@ void drawOLED()
   display.print(" (");
   display.print(modeToStr(pumpMode));
   display.print(")");
+
+  display.setCursor(0, 50);
+  display.print("Buzz: ");
+  display.print(buzzerOn ? "ON" : "OFF");
 
   display.display();
 }
@@ -518,7 +585,20 @@ void applyAutomation()
       setPump(shouldOn); // hourly pump overrides separately
   }
 
-  // No buzzer alerts anymore.
+  // BUZZER alerts (respect mode/silence)
+  time_t now = time(nullptr);
+  bool withinSilence = now < buzzerSilencedUntil;
+  bool waterLow = (gWaterADC <= settings.water_low_adc);
+  bool tempHigh = (!isnan(gTempC) && gTempC > settings.high_temp_c);
+
+  // Only alert in NORMAL mode; feed_only mutes regular alarms
+  if (buzzerMode == BUZZER_NORMAL && settings.alertsEnabled && !withinSilence)
+  {
+    if (waterLow)
+      beepMs(2000); // 2 sec chirp
+    else if (tempHigh)
+      beepMs(200); // short beep
+  }
 }
 
 // Hourly pump worker
@@ -610,6 +690,7 @@ void setup()
   pinMode(PIN_US_ECHO, INPUT);
 
   pinMode(PIN_LDR, INPUT);
+  pinMode(PIN_WATER, INPUT);
   pinMode(PIN_SPARE_ADC, INPUT);
 
   pinMode(PIN_LIGHT_RELAY, OUTPUT);
@@ -698,9 +779,10 @@ void loop()
       gHum = h;
 
     gLightADC = analogRead(PIN_LDR);
+    gWaterADC = analogRead(PIN_WATER);
 
     applyAutomation();
-    pushSensors(); // keep dashboard fresh
+    pushSensors(); // also keeps dashboard fresh
     pushStates();
   }
 
