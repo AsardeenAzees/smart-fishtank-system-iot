@@ -1,8 +1,3 @@
-Here’s a clean, copy-pasteable **README.md** you can drop in your repo.
-I included a suggested repo structure, setup steps, Firebase rules, wiring, RTDB schema, and **screenshot placeholders** you can swap with your own PNGs in `/docs/`.
-
----
-
 # Smart Fish Tank (ESP32 + Firebase + Web UI)
 
 A connected fish-tank controller built on **ESP32**, syncing with **Firebase Realtime Database** and a lightweight responsive **web dashboard**.
@@ -293,5 +288,3 @@ This project is released by Azees Asardeen under the **MIT License**. See `LICEN
 * DHT / Unified Sensor / SSD1306 / GFX – **Adafruit**
 * **ESP32Servo** library
 * Icons and UX inspired by modern design systems
-
----
