@@ -1,376 +1,554 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
-  <meta charset="utf-8" />
-  <title>Smart Fish Tank</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#0ea5e9">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Smart Fish Tank Dashboard</title>
+
+  <!-- Firebase (Compat for simplicity with your firmware) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
   <style>
     :root {
-      --bg: #0b1220;
-      --card: #0f172a;
-      --muted: #94a3b8;
-      --text: #e2e8f0;
-      --accent: #0ea5e9;
-      --ok: #10b981;
-      --warn: #f59e0b;
-      --bad: #ef4444;
-      --border: #1f2a44;
+      --bg: #0b1020;
+      --card: #121831;
+      --muted: #8ba0d9;
+      --text: #eaf0ff;
+      --accent: #5b8cff;
+      --on: #11b57f;
+      --off: #cf3e59;
+      --warn: #ffb020;
+      --border: #223059;
+      --chip: #1a2244;
+      --chip-border: #2a3a66;
+      --shadow: 0 10px 30px rgba(0, 0, 0, .28);
+      --radius: 16px;
     }
 
     * {
       box-sizing: border-box
     }
 
+    html,
     body {
       margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu;
+      padding: 0;
       background: var(--bg);
-      color: var(--text)
+      color: var(--text);
+      font: 500 clamp(14px, 1.8vw, 16px)/1.5 Inter, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: max(12px, env(safe-area-inset-top)) auto env(safe-area-inset-bottom) auto;
+      padding: 0 clamp(10px, 3vw, 16px);
     }
 
     header {
-      padding: 18px 18px 0
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      backdrop-filter: blur(8px);
+      background: color-mix(in oklab, var(--bg) 86%, transparent);
+      border-bottom: 1px solid rgba(255, 255, 255, .06);
+      margin: -12px calc(clamp(10px, 3vw, 16px) * -1) 14px;
+      padding: 10px clamp(10px, 3vw, 16px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
 
-    h1 {
-      margin: 0 0 8px;
-      font-size: 22px;
-      font-weight: 700
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px
     }
 
-    .sub {
+    .brand h1 {
+      margin: 0;
+      font-size: clamp(18px, 3.2vw, 22px);
+      letter-spacing: .2px
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--chip);
       color: var(--muted);
-      font-size: 13px
+      border: 1px solid var(--chip-border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
     }
 
-    main {
-      padding: 18px;
+    .grid {
       display: grid;
       gap: 16px;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      align-items: start
+      grid-template-columns: repeat(12, 1fr)
     }
 
     .card {
+      grid-column: span 12;
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
       padding: 16px;
-      box-shadow: 0 10px 30px #0006
     }
 
     .card h2 {
       margin: 0 0 10px;
-      font-size: 18px
+      font-size: 16px;
+      color: #dbe6ff
     }
 
-    .k {
+    /* Sensor chips */
+    .chips {
       display: flex;
-      justify-content: space-between;
-      margin: 6px 0;
-      font-size: 14px
-    }
-
-    .k b {
-      font-variant-numeric: tabular-nums
-    }
-
-    .row {
-      display: flex;
-      gap: 8px;
       flex-wrap: wrap;
-      align-items: center;
-      margin: 8px 0
+      gap: 10px
+    }
+
+    .kv {
+      min-width: 140px;
+      flex: 1 1 140px;
+      background: rgba(255, 255, 255, .04);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+
+    .kv b {
+      display: block;
+      font-size: 12px;
+      color: var(--muted)
+    }
+
+    .kv span {
+      display: block;
+      font-size: 18px;
+      margin-top: 2px
+    }
+
+    /* Buttons */
+    button {
+      font: inherit;
+      color: inherit;
+      border-radius: 12px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform .05s ease, border-color .2s ease, background .2s ease, color .2s ease, box-shadow .2s ease;
+      min-height: 44px;
+      padding: 10px 14px;
     }
 
     .btn {
-      padding: 9px 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #0b213a;
-      color: #e8f2ff;
-      cursor: pointer;
-      transition: transform .04s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease, color .15s ease;
-      user-select: none;
-      touch-action: manipulation
+      background: #0e1530;
+      border: 1px solid var(--border)
     }
 
     .btn:hover {
-      background: #0e2948
+      transform: translateY(-1px);
+      border-color: #3a58a1
     }
 
     .btn:active {
-      transform: translateY(1px)
+      transform: translateY(0)
     }
 
-    .btn.ok {
-      background: #0f3a2e;
-      border-color: #1a5847
-    }
-
-    .btn.warn {
-      background: #3a2f0f;
-      border-color: #5a4a1a
-    }
-
-    .btn.bad {
-      background: #3a1212;
-      border-color: #5a1a1a
+    .btn.primary {
+      background: var(--accent);
+      border-color: #3655c9;
+      color: #fff
     }
 
     .btn.ghost {
+      background: transparent
+    }
+
+    .btn.warn {
+      background: var(--warn);
+      border-color: #a77500;
+      color: #1a1a1a
+    }
+
+    /* Manual ON/OFF highlight */
+    .toggle {
+      background: linear-gradient(180deg, #0f1530 0%, #0b1026 100%);
+      border: 1px solid var(--border)
+    }
+
+    .toggle.active {
+      background: linear-gradient(180deg, rgba(17, 181, 127, .18) 0%, rgba(17, 181, 127, .08) 100%);
+      border-color: rgba(17, 181, 127, .6);
+      color: #eafff6;
+      box-shadow: 0 0 0 2px rgba(17, 181, 127, .15) inset;
+    }
+
+    .toggle.off {
+      background: linear-gradient(180deg, rgba(207, 62, 89, .16) 0%, rgba(207, 62, 89, .08) 100%);
+      border-color: rgba(207, 62, 89, .55);
+      color: #ffd8df;
+      box-shadow: 0 0 0 2px rgba(207, 62, 89, .12) inset;
+    }
+
+    /* Mode segmented control */
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden
+    }
+
+    .seg button {
       background: transparent;
+      border: 0;
+      color: var(--muted);
+      padding: 10px 12px;
+      font-weight: 700;
+      min-width: 84px
+    }
+
+    .seg button+button {
+      border-left: 1px solid var(--border)
+    }
+
+    .seg button.active {
+      background: rgba(91, 140, 255, .16);
+      color: #eaf0ff
+    }
+
+    .section {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px dashed var(--border);
+      margin-top: 12px;
+      padding-top: 12px
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 170px;
+      flex: 1 1 170px;
+      background: rgba(255, 255, 255, .04);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px
+    }
+
+    .field label {
+      font-size: 12px;
       color: var(--muted)
     }
 
-    .btn[disabled] {
-      opacity: .45;
-      cursor: not-allowed;
-      filter: grayscale(.15)
-    }
-
-    /* ACTIVE STATE HIGHLIGHT */
-    .btn.active {
-      background: #122e4f;
-      border-color: #2b86c9;
-      box-shadow: 0 0 0 2px #2b86c955 inset, 0 0 24px #0ea5e955;
-      color: #e6f3ff;
-    }
-
-    .btn.ok.active {
-      background: #134136;
-      border-color: #2ea585;
-      box-shadow: 0 0 0 2px #2ea58555 inset, 0 0 24px #2ea58555
-    }
-
-    .btn.warn.active {
-      background: #43330f;
-      border-color: #d7a125;
-      box-shadow: 0 0 0 2px #d7a12555 inset, 0 0 24px #d7a12555
-    }
-
-    .btn.bad.active {
-      background: #451515;
-      border-color: #ef4444;
-      box-shadow: 0 0 0 2px #ef444455 inset, 0 0 24px #ef444455
-    }
-
-    input[type="number"],
-    input[type="text"] {
+    .field input[type="number"],
+    .field input[type="time"] {
       width: 100%;
-      padding: 9px 10px;
+      padding: 10px 12px;
       border-radius: 10px;
       border: 1px solid var(--border);
-      background: #0b213a;
-      color: #e8f2ff
+      background: #0d1430;
+      color: var(--text);
+      outline: none
     }
 
-    label {
-      font-size: 12px;
+    /* Switch */
+    .switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer
+    }
+
+    .switch input {
+      display: none
+    }
+
+    .switch .knob {
+      width: 48px;
+      height: 28px;
+      border-radius: 999px;
+      position: relative;
+      background: #2b345b;
+      border: 1px solid var(--border);
+      transition: background .2s
+    }
+
+    .switch .knob::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #c6d3ff;
+      transition: left .2s
+    }
+
+    .switch input:checked+.knob {
+      background: #1e7b54;
+      border-color: #299e70
+    }
+
+    .switch input:checked+.knob::after {
+      left: 24px;
+      background: #eafff6
+    }
+
+    /* Responsive spans on larger screens */
+    @media (min-width: 900px) {
+      .span-6 {
+        grid-column: span 6
+      }
+
+      .span-4 {
+        grid-column: span 4
+      }
+
+      .span-8 {
+        grid-column: span 8
+      }
+    }
+
+    /* Mobile tweaks */
+    @media (max-width: 599px) {
+      .seg {
+        width: 100%
+      }
+
+      .seg button {
+        flex: 1 1 33.3%
+      }
+
+      .controls {
+        width: 100%;
+        justify-content: space-between
+      }
+
+      .chips .kv {
+        min-width: 46%;
+        flex: 1 1 46%
+      }
+    }
+
+    .footer {
+      margin: 16px 0 10px;
+      text-align: center;
       color: var(--muted);
-      display: block;
-      margin: 10px 0 6px
-    }
-
-    small {
-      color: var(--muted)
-    }
-
-    .tag {
-      padding: 3px 8px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 12px;
-      color: var(--muted)
-    }
-
-    .pill {
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: #0b213a;
-      border: 1px solid var(--border);
       font-size: 12px
     }
 
-    .grid2 {
-      display: grid;
-      gap: 10px;
-      grid-template-columns: repeat(2, 1fr)
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      background: #0e1534;
+      color: #eaf0ff;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, .35);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .2s, transform .2s
     }
 
-    hr {
-      border: none;
-      height: 1px;
-      background: var(--border);
-      margin: 12px 0
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0)
     }
 
-    footer {
-      padding: 0 18px 18px;
-      color: var(--muted);
-      font-size: 12px
+    /* Offline banner */
+    .offline {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 16px;
+      z-index: 10;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid #7a2d2d;
+      background: #351618;
+      color: #ffd5d5;
+      font-size: 13px;
+      display: none
     }
 
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace
-    }
-
-    .muted {
-      color: var(--muted)
+    .offline.show {
+      display: block
     }
   </style>
 </head>
 
 <body>
-  <header>
-    <h1>🐟 Smart Fish Tank</h1>
-    <div class="sub">Live control dashboard (ESP32 + Firebase RTDB)</div>
-  </header>
-
-  <main>
-    <!-- Sensors -->
-    <section class="card">
-      <h2>Live Sensors</h2>
-      <div class="k"><span>Temperature</span><b><span id="tC">—</span> °C</b></div>
-      <div class="k"><span>Humidity</span><b><span id="hum">—</span> %</b></div>
-      <div class="k"><span>Proximity</span><b><span id="prox">—</span> cm</b></div>
-      <div class="k"><span>Light ADC</span><b><span id="ldr">—</span></b></div>
-      <div class="k"><span>Water ADC</span><b><span id="water">—</span></b></div>
-      <hr />
-      <div class="k"><span class="muted">Updated</span><small id="updated">—</small></div>
-    </section>
-
-    <!-- States -->
-    <section class="card">
-      <h2>Device States</h2>
-      <div class="k"><span>Light</span><b id="lightState" class="pill">—</b></div>
-      <div class="k"><span>Pump</span><b id="pumpState" class="pill">—</b></div>
-      <div class="k"><span>Buzzer</span><b id="buzzState" class="pill">—</b></div>
-      <hr />
-      <div class="k"><span>Light Mode</span><b id="lightMode" class="tag">—</b></div>
-      <div class="k"><span>Pump Mode</span><b id="pumpMode" class="tag">—</b></div>
-      <div class="k"><span>Buzzer Mode</span><b id="buzzerMode" class="tag">—</b></div>
-    </section>
-
-    <!-- Controls -->
-    <section class="card">
-      <h2>Controls</h2>
-      <!-- Light mode -->
-      <div class="row">
-        <button id="lightAuto" class="btn" aria-pressed="false">Light: AUTO</button>
-        <button id="lightManual" class="btn" aria-pressed="false">MANUAL</button>
-        <button id="lightOff" class="btn" aria-pressed="false">OFF</button>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 12s3-5 9-5 9 5 9 5-3 5-9 5-9-5-9-5Z" stroke="#5b8cff" stroke-width="1.5" />
+          <circle cx="12" cy="12" r="2.2" stroke="#5b8cff" stroke-width="1.5" />
+        </svg>
+        <h1>Smart Fish Tank</h1>
       </div>
-      <!-- Light manual toggle -->
-      <div class="row">
-        <button id="lightOn" class="btn ok" aria-pressed="false">Light ON</button>
-        <button id="lightOff2" class="btn" aria-pressed="false">Light OFF</button>
-      </div>
+      <div class="chip" id="conn">Connecting…</div>
+    </header>
 
-      <hr />
-
-      <!-- Pump mode -->
-      <div class="row">
-        <button id="pumpAuto" class="btn" aria-pressed="false">Pump: AUTO</button>
-        <button id="pumpManual" class="btn" aria-pressed="false">MANUAL</button>
-        <button id="pumpOff" class="btn" aria-pressed="false">OFF</button>
-      </div>
-      <!-- Pump manual toggle -->
-      <div class="row">
-        <button id="pumpOn" class="btn ok" aria-pressed="false">Pump ON</button>
-        <button id="pumpOff2" class="btn" aria-pressed="false">Pump OFF</button>
-      </div>
-
-      <hr />
-
-      <!-- Buzzer mode -->
-      <div class="row">
-        <button id="buzzFeedOnly" class="btn warn" aria-pressed="false">Buzzer: Feed-Only</button>
-        <button id="buzzNormal" class="btn" aria-pressed="false">Buzzer: Normal</button>
-      </div>
-      <!-- Legacy buzzer cmds -->
-      <div class="row">
-        <button id="buzzToggle" class="btn">Buzzer Toggle</button>
-        <input id="buzzSilenceMin" type="number" min="1" placeholder="Silence minutes" />
-        <button id="buzzSilenceBtn" class="btn">Silence</button>
-      </div>
-
-      <div class="row">
-        <button id="feedNow" class="btn ok">Feed Now</button>
-      </div>
-    </section>
-
-    <!-- Settings -->
-    <section class="card">
-      <h2>Automation Settings</h2>
-      <div class="grid2">
-        <div>
-          <label>Proximity threshold (cm)</label>
-          <input id="thrProx" type="number" value="20" />
+    <div class="grid">
+      <!-- Live Sensors -->
+      <section class="card span-6">
+        <h2>Live Sensors</h2>
+        <div class="chips" id="sensors">
+          <div class="kv"><b>Temperature</b><span id="temp">—</span></div>
+          <div class="kv"><b>Humidity</b><span id="hum">—</span></div>
+          <div class="kv"><b>Ambient Light (ADC)</b><span id="ldr">—</span></div>
+          <div class="kv"><b>Proximity</b><span id="prox">—</span></div>
+          <div class="kv"><b>Last Update</b><span id="last">—</span></div>
         </div>
-        <div>
-          <label>Low light ADC</label>
-          <input id="thrLdr" type="number" value="1700" />
-        </div>
-        <div>
-          <label>Water low ADC</label>
-          <input id="thrWater" type="number" value="1200" />
-        </div>
-        <div>
-          <label>High temp (°C)</label>
-          <input id="thrTemp" type="number" step="0.1" value="32" />
-        </div>
-        <div>
-          <label>Hourly pump seconds</label>
-          <input id="hourlySecs" type="number" value="25" />
-        </div>
-      </div>
-      <div class="row">
-        <button id="saveSettings" class="btn">Save Settings</button>
-      </div>
-      <hr />
-      <h2>Feeding</h2>
-      <div class="grid2">
-        <div>
-          <label>Feeding time 1 (HH:MM)</label>
-          <input id="feed1" type="text" value="08:00" placeholder="08:00" />
-        </div>
-        <div>
-          <label>Feeding time 2 (HH:MM)</label>
-          <input id="feed2" type="text" value="20:00" placeholder="20:00" />
-        </div>
-      </div>
-      <div class="row">
-        <button id="saveFeeding" class="btn">Save Feeding</button>
-      </div>
-      <hr />
-      <div class="k"><span>Last feed</span><b id="lastFeed">—</b></div>
-      <div class="k"><span>Label</span><b id="lastFeedLabel" class="tag">—</b></div>
-    </section>
+      </section>
 
-    <!-- Logs (today) -->
-    <section class="card">
-      <h2>Recent Logs (today)</h2>
-      <div class="row">
-        <button id="refreshLogs" class="btn">Refresh</button>
-        <small class="muted">Shows last ~30 entries for today</small>
-      </div>
-      <div id="logs" class="mono" style="font-size:12px; max-height:260px; overflow:auto; white-space:pre;"></div>
-    </section>
-  </main>
+      <!-- Actuators -->
+      <section class="card span-6">
+        <h2>Relays & Modes</h2>
 
-  <footer>
-    <span class="muted">Signed in as:</span> <span id="uid" class="mono">—</span>
-  </footer>
+        <div class="section">
+          <div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Light</div>
+            <div class="seg" role="tablist" aria-label="Light mode">
+              <button class="mode-light" data-mode="auto" aria-pressed="false">Auto</button>
+              <button class="mode-light" data-mode="manual" aria-pressed="false">Manual</button>
+              <button class="mode-light" data-mode="off" aria-pressed="false">Off</button>
+            </div>
+          </div>
+          <div class="controls">
+            <button id="btnLightState" class="btn toggle" title="Manual ON/OFF (enabled in Manual mode)"
+              aria-pressed="false">Light: OFF</button>
+          </div>
+        </div>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-app.js";
-    import { getDatabase, ref, onValue, update, set, get } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-database.js";
-    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-auth.js";
+        <div class="section">
+          <div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Pump</div>
+            <div class="seg" role="tablist" aria-label="Pump mode">
+              <button class="mode-pump" data-mode="auto" aria-pressed="false">Auto</button>
+              <button class="mode-pump" data-mode="manual" aria-pressed="false">Manual</button>
+              <button class="mode-pump" data-mode="off" aria-pressed="false">Off</button>
+            </div>
+          </div>
+          <div class="controls">
+            <button id="btnPumpState" class="btn toggle" title="Manual ON/OFF (enabled in Manual mode)"
+              aria-pressed="false">Pump: OFF</button>
+          </div>
+        </div>
+      </section>
 
-    // ====== REPLACE WITH YOUR PROJECT CONFIG ======
+      <!-- Feeding -->
+      <section class="card span-4">
+        <h2>Feeding</h2>
+        <div class="chips">
+          <div class="kv"><b>Last Feed</b><span id="lastFeed">—</span></div>
+          <div class="kv"><b>Next Feed</b><span id="nextFeed">—</span></div>
+        </div>
+
+        <div class="section">
+          <div class="controls">
+            <label class="switch" title="Enable scheduled feeding">
+              <input type="checkbox" id="feedingEnabled" />
+              <span class="knob" aria-hidden="true"></span>
+            </label>
+            <span style="color:var(--muted);font-size:14px;">Enable scheduled feeding</span>
+          </div>
+          <button id="feedNow" class="btn primary">Feed Now</button>
+        </div>
+
+        <div class="section">
+          <div class="field">
+            <label for="time1">Feeding time 1</label>
+            <input id="time1" type="time" value="08:00" />
+          </div>
+          <div class="field">
+            <label for="time2">Feeding time 2</label>
+            <input id="time2" type="time" value="20:00" />
+          </div>
+        </div>
+      </section>
+
+      <!-- Automation Rules -->
+      <section class="card span-8">
+        <h2>Automation & Thresholds</h2>
+
+        <div class="section">
+          <div class="controls">
+            <label class="switch">
+              <input type="checkbox" id="presenceRule" />
+              <span class="knob"></span>
+            </label>
+            <span style="color:var(--muted);font-size:14px;">Presence rule (≤ proximity)</span>
+          </div>
+
+          <div class="controls">
+            <label class="switch">
+              <input type="checkbox" id="lowLightRule" />
+              <span class="knob"></span>
+            </label>
+            <span style="color:var(--muted);font-size:14px;">Low-light rule (light ≤ ADC)</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="field">
+            <label for="proxThresh">Proximity threshold (cm)</label>
+            <input id="proxThresh" type="number" min="1" max="400" step="1" value="20" />
+          </div>
+          <div class="field">
+            <label for="lightThresh">Low-light threshold (ADC)</label>
+            <input id="lightThresh" type="number" min="0" max="4095" step="1" value="1700" />
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="controls">
+            <label class="switch">
+              <input type="checkbox" id="hourlyPumpEnabled" />
+              <span class="knob"></span>
+            </label>
+            <span style="color:var(--muted);font-size:14px;">Hourly pump</span>
+          </div>
+          <div class="field">
+            <label for="hourlyPumpSeconds">Hourly pump runtime (seconds)</label>
+            <input id="hourlyPumpSeconds" type="number" min="5" max="300" step="5" value="25" />
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="footer">Status: <span id="authState">auth…</span></div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="offline" class="offline">You’re offline. Changes will sync when connected.</div>
+
+  <script>
+    // ---- Firebase config (left unchanged; matches your firmware) ----
     const firebaseConfig = {
       apiKey: "AIzaSyCPokWLKrM-JbJgQL0vVDccdR-qrmAHQ_Q",
       authDomain: "fishtank-system.firebaseapp.com",
@@ -381,187 +559,210 @@
       appId: "1:333858962529:web:87ea50878e00d4bdd8be20",
       measurementId: "G-67L85BD3S8"
     };
-    // =============================================
 
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
-    const auth = getAuth(app);
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.database();
 
-    // Auth
-    signInAnonymously(auth).catch(console.error);
-    onAuthStateChanged(auth, (u) => { if (u) { document.getElementById('uid').textContent = u.uid; } });
+    // ---- Helpers ----
+    const el = id => document.getElementById(id);
+    const $$ = sel => Array.from(document.querySelectorAll(sel));
 
-    // Helpers
-    const $ = (id) => document.getElementById(id);
-    const asTime = (s) => s ? new Date(s * 1000).toLocaleString() : "—";
-    const setPill = (el, on) => { el.textContent = on ? "ON" : "OFF"; el.style.borderColor = on ? "#1a5847" : "var(--border)"; };
-    const setDisabled = (ids, dis) => ids.forEach(id => {
-      const el = $(id); if (!el) return;
-      el.disabled = dis;
-      el.classList.toggle('ghost', dis);
-      el.setAttribute('aria-pressed', el.classList.contains('active') && !dis ? 'true' : 'false');
-      if (dis) el.classList.remove('active'); // when disabled, ensure not highlighted
-    });
-    const markActiveOne = (ids, activeId) => ids.forEach(id => {
-      const el = $(id); if (!el) return;
-      const on = (id === activeId);
-      el.classList.toggle('active', on);
-      el.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-    const clearActive = (ids) => ids.forEach(id => { const el = $(id); if (el) { el.classList.remove('active'); el.setAttribute('aria-pressed', 'false'); } });
+    const conn = el('conn');
+    const authState = el('authState');
+    const toast = el('toast');
+    const offline = el('offline');
 
-    // Live sensors
-    onValue(ref(db, '/sensors'), snap => {
-      const v = snap.val() || {};
-      $('tC').textContent = v.temperature_c ?? '—';
-      $('hum').textContent = v.humidity_pct ?? '—';
-      $('prox').textContent = v.proximity_cm ?? '—';
-      $('ldr').textContent = v.light_adc ?? '—';
-      $('water').textContent = v.water_adc ?? '—';
-      $('updated').textContent = asTime(v.last_update);
-    });
-
-    // Live states + ACTIVE BUTTON SYNC
-    onValue(ref(db, '/states'), snap => {
-      const v = snap.val() || {};
-
-      // pills
-      setPill($('lightState'), !!v.light_on);
-      setPill($('pumpState'), !!v.pump_on);
-      setPill($('buzzState'), !!v.buzzer_on);
-
-      // text tags
-      const lm = (v.light_mode || 'auto');
-      const pm = (v.pump_mode || 'auto');
-      const bm = (v.buzzer_mode || 'normal');
-      $('lightMode').textContent = lm;
-      $('pumpMode').textContent = pm;
-      $('buzzerMode').textContent = bm;
-
-      // highlight Light mode buttons
-      const lightModeBtn = { auto: 'lightAuto', manual: 'lightManual', off: 'lightOff' }[lm] || 'lightAuto';
-      markActiveOne(['lightAuto', 'lightManual', 'lightOff'], lightModeBtn);
-
-      // highlight Pump mode buttons
-      const pumpModeBtn = { auto: 'pumpAuto', manual: 'pumpManual', off: 'pumpOff' }[pm] || 'pumpAuto';
-      markActiveOne(['pumpAuto', 'pumpManual', 'pumpOff'], pumpModeBtn);
-
-      // highlight Buzzer mode buttons
-      const buzBtn = (bm === 'feed_only') ? 'buzzFeedOnly' : 'buzzNormal';
-      markActiveOne(['buzzFeedOnly', 'buzzNormal'], buzBtn);
-
-      // enable/disable + highlight manual ON/OFF based on mode
-      setDisabled(['lightOn', 'lightOff2'], lm !== 'manual');
-      setDisabled(['pumpOn', 'pumpOff2'], pm !== 'manual');
-
-      if (lm === 'manual') {
-        markActiveOne(['lightOn', 'lightOff2'], v.light_on ? 'lightOn' : 'lightOff2');
-      } else {
-        clearActive(['lightOn', 'lightOff2']);
-      }
-
-      if (pm === 'manual') {
-        markActiveOne(['pumpOn', 'pumpOff2'], v.pump_on ? 'pumpOn' : 'pumpOff2');
-      } else {
-        clearActive(['pumpOn', 'pumpOff2']);
-      }
-    });
-
-    // Settings live load
-    onValue(ref(db, '/settings'), snap => {
-      const s = snap.val() || {};
-      if (s.thresholds) {
-        if (s.thresholds.proximity_cm != null) $('thrProx').value = s.thresholds.proximity_cm;
-        if (s.thresholds.low_light_adc != null) $('thrLdr').value = s.thresholds.low_light_adc;
-        if (s.thresholds.water_low_adc != null) $('thrWater').value = s.thresholds.water_low_adc;
-        if (s.thresholds.high_temp_c != null) $('thrTemp').value = s.thresholds.high_temp_c;
-      }
-      if (s.hourly_pump && s.hourly_pump.seconds != null) $('hourlySecs').value = s.hourly_pump.seconds;
-      if (s.feeding) {
-        if (s.feeding.time1) $('feed1').value = s.feeding.time1;
-        if (s.feeding.time2) $('feed2').value = s.feeding.time2;
-      }
-    });
-
-    // Feeding meta
-    onValue(ref(db, '/meta'), snap => {
-      const m = snap.val() || {};
-      $('lastFeed').textContent = m.last_feed_time ? new Date(m.last_feed_time * 1000).toLocaleString() : '—';
-      $('lastFeedLabel').textContent = m.last_feed_label || '—';
-    });
-
-    // Controls → /commands
-    const cmdRef = ref(db, '/commands');
-
-    // Light mode
-    $('lightAuto').onclick = () => update(cmdRef, { light_mode: 'auto' });
-    $('lightManual').onclick = () => update(cmdRef, { light_mode: 'manual' });
-    $('lightOff').onclick = () => update(cmdRef, { light_mode: 'off' });
-    // Light manual state
-    $('lightOn').onclick = () => update(cmdRef, { light_manual_state: true });
-    $('lightOff2').onclick = () => update(cmdRef, { light_manual_state: false });
-
-    // Pump mode
-    $('pumpAuto').onclick = () => update(cmdRef, { pump_mode: 'auto' });
-    $('pumpManual').onclick = () => update(cmdRef, { pump_mode: 'manual' });
-    $('pumpOff').onclick = () => update(cmdRef, { pump_mode: 'off' });
-    // Pump manual state
-    $('pumpOn').onclick = () => update(cmdRef, { pump_manual_state: true });
-    $('pumpOff2').onclick = () => update(cmdRef, { pump_manual_state: false });
-
-    // Buzzer mode
-    $('buzzFeedOnly').onclick = () => update(cmdRef, { buzzer_mode: 'feed_only' });
-    $('buzzNormal').onclick = () => update(cmdRef, { buzzer_mode: 'normal' });
-
-    // Legacy buzzer controls
-    $('buzzToggle').onclick = () => update(cmdRef, { buzzer_toggle: true });
-    $('buzzSilenceBtn').onclick = () => {
-      const mins = parseInt($('buzzSilenceMin').value || "0", 10);
-      if (mins > 0) update(cmdRef, { buzzer_silence_minutes: mins });
-    };
-
-    // Feed Now
-    $('feedNow').onclick = () => update(cmdRef, { feed_now: true });
-
-    // Save settings
-    $('saveSettings').onclick = () => {
-      const up = {
-        thresholds: {
-          proximity_cm: parseInt($('thrProx').value || "20", 10),
-          low_light_adc: parseInt($('thrLdr').value || "1700", 10),
-          water_low_adc: parseInt($('thrWater').value || "1200", 10),
-          high_temp_c: parseFloat($('thrTemp').value || "32")
-        },
-        hourly_pump: { seconds: parseInt($('hourlySecs').value || "25", 10) }
-      };
-      update(ref(db, '/settings'), up);
-    };
-
-    $('saveFeeding').onclick = () => {
-      const up = { feeding: { time1: $('feed1').value, time2: $('feed2').value } };
-      update(ref(db, '/settings'), up);
-    };
-
-    // Logs (today)
-    function ymd(d) {
-      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${dd}`;
+    function showToast(msg, ms = 1800) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove('show'), ms);
     }
-    async function loadLogs() {
-      const today = ymd(new Date());
-      const base = `/logs/sensors/${today}`;
-      const snap = await get(ref(db, base));
-      const val = snap.val() || {};
-      const keys = Object.keys(val).sort(); // timestamps asc
-      const last = keys.slice(-30);
-      const lines = last.map(k => {
-        const v = val[k];
-        return `${new Date(parseInt(k, 10) * 1000).toLocaleTimeString()}  tC=${v.tC}  h=${v.h}  ldr=${v.ldr}  water=${v.water}  prox=${v.prox_cm}`;
+    function setConn(text, good = false) {
+      conn.textContent = text;
+      conn.style.background = good ? 'rgba(17,181,127,.18)' : 'var(--chip)';
+      conn.style.borderColor = good ? 'rgba(17,181,127,.6)' : 'var(--chip-border)';
+      conn.style.color = good ? '#cffff1' : 'var(--muted)';
+    }
+    function fmtTime(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts * 1000);
+      return d.toLocaleString(undefined, { hour12: false });
+    }
+    function nextFeedFrom(settings) {
+      if (!settings?.feedingEnabled) return '—';
+      const times = [settings.feedTime1, settings.feedTime2].filter(Boolean);
+      const now = new Date(); const candidates = [];
+      for (const hhmm of times) {
+        const [H, M] = (hhmm || '').split(':').map(v => parseInt(v || 0, 10));
+        const today = new Date(now); today.setHours(H || 0, M || 0, 0, 0);
+        const n = today > now ? today : new Date(today.getTime() + 86400000);
+        candidates.push(n);
+      }
+      candidates.sort((a, b) => a - b);
+      return candidates[0]?.toLocaleString(undefined, { hour12: false }) || '—';
+    }
+    function setSegActive(buttons, value) {
+      buttons.forEach(b => {
+        const active = b.dataset.mode === value;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-pressed', String(active));
       });
-      $('logs').textContent = lines.join('\n') || 'No entries yet.';
     }
-    $('refreshLogs').onclick = loadLogs;
-    loadLogs();
+    function setManualBtnVisual(btn, isOn, enabled, label) {
+      btn.textContent = `${label}: ${isOn ? 'ON' : 'OFF'}`;
+      btn.classList.remove('active', 'off');
+      btn.classList.add(isOn ? 'active' : 'off');
+      btn.disabled = !enabled;
+      btn.style.opacity = enabled ? 1 : .6;
+      btn.setAttribute('aria-pressed', String(isOn));
+      btn.title = enabled ? 'Toggle' : 'Switch to Manual mode to enable';
+    }
+    function dbUpdate(path, data) { return db.ref(path).update(data); }
+
+    // ---- AUTH ----
+    setConn('Connecting…');
+    auth.onAuthStateChanged(user => {
+      if (user) { authState.textContent = 'signed in (anonymous)'; setConn('Online', true); }
+      else { authState.textContent = 'signing in…'; }
+    });
+    auth.signInAnonymously().catch(err => {
+      console.error(err); showToast('Auth error: ' + err.message, 2600); setConn('Auth error');
+    });
+
+    // ---- Refs ----
+    const temp = el('temp'), hum = el('hum'), ldr = el('ldr'), prox = el('prox'), last = el('last');
+    const lastFeed = el('lastFeed'), nextFeed = el('nextFeed');
+
+    const btnLightState = el('btnLightState'), btnPumpState = el('btnPumpState');
+    const lightModeButtons = $$('.mode-light'), pumpModeButtons = $$('.mode-pump');
+
+    const feedingEnabled = el('feedingEnabled'), feedNow = el('feedNow'), time1 = el('time1'), time2 = el('time2');
+
+    const presenceRule = el('presenceRule'), lowLightRule = el('lowLightRule');
+    const proxThresh = el('proxThresh'), lightThresh = el('lightThresh');
+    const hourlyPumpEnabled = el('hourlyPumpEnabled'), hourlyPumpSeconds = el('hourlyPumpSeconds');
+
+    // ---- Live sensors ----
+    db.ref('/sensors').on('value', snap => {
+      const s = snap.val() || {};
+      temp.textContent = Number.isFinite(s.temperature_c) ? `${s.temperature_c.toFixed(1)} °C` : '—';
+      hum.textContent = Number.isFinite(s.humidity_pct) ? `${s.humidity_pct.toFixed(0)} %` : '—';
+      ldr.textContent = Number.isFinite(s.light_adc) ? s.light_adc : '—';
+      prox.textContent = Number.isFinite(s.proximity_cm) ? `${s.proximity_cm} cm` : '—';
+      last.textContent = s.last_update ? fmtTime(s.last_update) : '—';
+    });
+
+    // ---- States & modes ----
+    let _lightMode = 'auto', _pumpMode = 'auto';
+    db.ref('/states').on('value', snap => {
+      const st = snap.val() || {};
+      const light_on = !!st.light_on;
+      const pump_on = !!st.pump_on;
+      _lightMode = st.light_mode || _lightMode;
+      _pumpMode = st.pump_mode || _pumpMode;
+
+      setSegActive(lightModeButtons, _lightMode);
+      setSegActive(pumpModeButtons, _pumpMode);
+      setManualBtnVisual(btnLightState, light_on, _lightMode === 'manual', 'Light');
+      setManualBtnVisual(btnPumpState, pump_on, _pumpMode === 'manual', 'Pump');
+    });
+
+    // ---- Meta (feeding) ----
+    db.ref('/meta').on('value', snap => {
+      const m = snap.val() || {};
+      lastFeed.textContent = m.last_feed_time ? fmtTime(m.last_feed_time) : '—';
+    });
+
+    // ---- Settings (fill UI) ----
+    let _settings = null;
+    db.ref('/settings').on('value', snap => {
+      const s = snap.val() || {};
+      _settings = {
+        presenceRuleEnabled: !!s.presence_rule,
+        lowLightRuleEnabled: !!s.low_light_rule,
+        hourlyPump: {
+          enabled: !!(s.hourly_pump && s.hourly_pump.enabled),
+          seconds: Number(s.hourly_pump && s.hourly_pump.seconds) || 25
+        },
+        proximity_cm: Number(s.thresholds && s.thresholds.proximity_cm) || 20,
+        low_light_adc: Number(s.thresholds && s.thresholds.low_light_adc) || 1700,
+        feedingEnabled: !!(s.feeding && s.feeding.enabled),
+        feedTime1: (s.feeding && s.feeding.time1) || '08:00',
+        feedTime2: (s.feeding && s.feeding.time2) || '20:00'
+      };
+
+      presenceRule.checked = _settings.presenceRuleEnabled;
+      lowLightRule.checked = _settings.lowLightRuleEnabled;
+      proxThresh.value = _settings.proximity_cm;
+      lightThresh.value = _settings.low_light_adc;
+
+      hourlyPumpEnabled.checked = _settings.hourlyPump.enabled;
+      hourlyPumpSeconds.value = _settings.hourlyPump.seconds;
+
+      feedingEnabled.checked = _settings.feedingEnabled;
+      time1.value = _settings.feedTime1;
+      time2.value = _settings.feedTime2;
+
+      nextFeed.textContent = nextFeedFrom(_settings);
+    });
+
+    // ---- Writes: modes ----
+    function setMode(kind, mode) {
+      const key = kind === 'light' ? 'light_mode' : 'pump_mode';
+      dbUpdate('/commands', { [key]: mode })
+        .then(() => showToast(`${kind} → ${mode.toUpperCase()}`))
+        .catch(err => showToast(err.message));
+    }
+    lightModeButtons.forEach(btn => btn.addEventListener('click', () => setMode('light', btn.dataset.mode)));
+    pumpModeButtons.forEach(btn => btn.addEventListener('click', () => setMode('pump', btn.dataset.mode)));
+
+    // ---- Writes: manual states ----
+    btnLightState.addEventListener('click', () => {
+      if (_lightMode !== 'manual') return;
+      const isOn = btnLightState.classList.contains('active');
+      dbUpdate('/commands', { light_manual_state: !isOn }).catch(err => showToast(err.message));
+    });
+    btnPumpState.addEventListener('click', () => {
+      if (_pumpMode !== 'manual') return;
+      const isOn = btnPumpState.classList.contains('active');
+      dbUpdate('/commands', { pump_manual_state: !isOn }).catch(err => showToast(err.message));
+    });
+
+    // ---- Writes: Feed now ----
+    feedNow.addEventListener('click', () => {
+      feedNow.disabled = true;
+      dbUpdate('/commands', { feed_now: true })
+        .then(() => showToast('Feeding…'))
+        .finally(() => setTimeout(() => feedNow.disabled = false, 800));
+    });
+
+    // ---- Writes: settings (debounced) ----
+    let writeTimer;
+    function scheduleWrite() { clearTimeout(writeTimer); writeTimer = setTimeout(writeSettings, 280); }
+    function writeSettings() {
+      const updates = {
+        presence_rule: presenceRule.checked,
+        low_light_rule: lowLightRule.checked,
+        hourly_pump: { enabled: hourlyPumpEnabled.checked, seconds: Number(hourlyPumpSeconds.value || 25) },
+        thresholds: { proximity_cm: Number(proxThresh.value || 20), low_light_adc: Number(lightThresh.value || 1700) },
+        feeding: { enabled: feedingEnabled.checked, time1: time1.value || '08:00', time2: time2.value || '20:00' }
+      };
+      db.ref('/settings').set(updates).then(() => showToast('Settings saved')).catch(err => showToast(err.message));
+    }
+    [presenceRule, lowLightRule, hourlyPumpEnabled, hourlyPumpSeconds, proxThresh, lightThresh, feedingEnabled, time1, time2]
+      .forEach(ctrl => {
+        ctrl.addEventListener('change', scheduleWrite);
+        ctrl.addEventListener('input', scheduleWrite);
+      });
+
+    // ---- Connection/Offline status ----
+    db.ref(".info/connected").on("value", snap => {
+      const ok = !!snap.val();
+      setConn(ok ? 'Online' : 'Offline', ok);
+      offline.classList.toggle('show', !ok);
+    });
   </script>
 </body>
 
