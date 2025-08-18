@@ -44,7 +44,6 @@ smart-fishtank/
 └─ README.md
 ```
 
-> Replace the `docs/*.png` placeholders with your images so they render on GitHub.
 
 ---
 
@@ -233,7 +232,6 @@ The firmware & UI expect these paths:
 | Servo                | 4       |
 | OLED SDA / SCL       | 21 / 22 |
 
-> Adjust pins in firmware if your board differs.
 
 ---
 
