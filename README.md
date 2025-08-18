@@ -272,8 +272,6 @@ Example embeds already included at the top of this README:
 ![Dashboard](docs/screenshot-dashboard.png)
 ```
 
-> Tip: On macOS use `⌘⇧4`, on Windows `Win+Shift+S`, on Linux `gnome-screenshot` or `flameshot`.
-
 ---
 
 ## 📝 License
