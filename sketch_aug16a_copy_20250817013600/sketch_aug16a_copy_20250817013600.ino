@@ -1,485 +1,804 @@
-#include "DHT.h"
+/*******************************
+ * Smart Fish Tank – ESP32 Firmware
+ * Requirements covered:
+ * - Sensors: DHT11, Ultrasonic, LDR (ADC), Water level (ADC)
+ * - Actuators: Light relay, Pump relay (active LOW), Buzzer, Servo feeder, OLED
+ * - Rules: presence, low-light, hourly pump; buzzer alerts; scheduled feeding
+ * - Firebase Realtime Database (RTDB) sync: sensors, states, commands, settings, logs
+ * - Offline-safe automation if Wi-Fi drops
+ *******************************/
+
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+
+#include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <WiFi.h>
-#include <Firebase_ESP_Client.h>
 #include <ESP32Servo.h>
-#include <time.h>
 
-// -------------------- Configuration --------------------
-#define WIFI_SSID        "Redmi Note 8"
-#define WIFI_PASSWORD    "kijan123"
+// -------------------- User Config --------------------
+#define WIFI_SSID "Redmi Note 8"
+#define WIFI_PASSWORD "kijan123"
 
-#define API_KEY          "AIzaSyCPokWLKrM-JbJgQL0vVDccdR-qrmAHQ_Q"
-#define DATABASE_URL     "https://fishtank-system-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define API_KEY "AIzaSyCPokWLKrM-JbJgQL0vVDccdR-qrmAHQ_Q"
+#define DATABASE_URL "https://fishtank-system-default-rtdb.asia-southeast1.firebasedatabase.app"
 
-#define SCREEN_WIDTH     128
-#define SCREEN_HEIGHT    64
-#define OLED_RESET       -1
-#define OLED_I2C_ADDRESS 0x3C
+// Optional timezone (Sri Lanka +5:30)
+static const long GMT_OFFSET_SEC = 5 * 3600 + 30 * 60;
+static const int DST_OFFSET_SEC = 0;
 
-// -------------------- Pins (same as your board) --------------------
-#define DHTPIN            15
-#define DHTTYPE           DHT11
-#define TRIG_PIN          27
-#define ECHO_PIN          18
-#define SIGNAL_PIN        34     // soil
-#define LIGHT_SENSOR_PIN  32
-#define WATER_LEVEL_PIN   33
-#define RELAY_DEVICE1     5      // light
-#define RELAY_DEVICE2     16     // pump
-#define BUZZER_PIN        25
-#define SERVO_PIN         4
+// -------------------- Pins (fixed) -------------------
+#define PIN_DHT 15 // DHT11 on GPIO15 (boot strap; ensure ~10k pull-up)
+#define DHTTYPE DHT11
 
-// -------------------- Objects --------------------
-DHT dht(DHTPIN, DHTTYPE);
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+#define PIN_US_TRIG 27
+#define PIN_US_ECHO 18 // Level shift to 3.3V if sensor is 5V!
+
+#define PIN_LDR 32       // ADC
+#define PIN_WATER 33     // ADC
+#define PIN_SPARE_ADC 34 // Not used
+
+#define PIN_LIGHT_RELAY 5 // Active LOW
+#define PIN_PUMP_RELAY 16 // Active LOW
+#define PIN_BUZZER 25
+#define PIN_SERVO 4
+
+// OLED I2C
+#define I2C_SDA 21
+#define I2C_SCL 22
+#define OLED_ADDR 0x3C
+#define OLED_W 128
+#define OLED_H 64
+
+// -------------------- Globals ------------------------
+DHT dht(PIN_DHT, DHTTYPE);
+Adafruit_SSD1306 display(OLED_W, OLED_H, &Wire, -1);
+Servo feeder;
+
 FirebaseData fbdo;
+FirebaseData stream;
 FirebaseAuth auth;
 FirebaseConfig configFB;
-Servo feedServo;
 
-// -------------------- Vars --------------------
-bool signupOK = false;
+// Current readings
+float gTempC = NAN, gHum = NAN;
+int gLightADC = 0, gWaterADC = 0;
+int gProximity = 9999; // cm
 
-float temperature = 0, humidity = 0, distanceCM = 0;
-int soilMoisture = 0, lightLevel = 0, waterLevel = 0;
+// Relay/buzzer states (true = ON)
+bool lightOn = false, pumpOn = false, buzzerOn = false;
 
-int lightManual = 0, pumpManual = 0, buzzerManual = 0;
-int lightAutoPresence = 1, lightAutoLow = 1;
-int pumpAutoPresence = 1, pumpAutoHourly = 1;
-int pumpMaxOnSec = 300;
-int proximityCM = 20, lightLowThresh = 1200, waterLowThresh = 1000, tempHighC = 32;
-int tzOffsetMin = 330;
-String ntpPool = "pool.ntp.org";
+// Modes
+enum Mode
+{
+  MODE_AUTO,
+  MODE_MANUAL,
+  MODE_OFF
+};
+Mode lightMode = MODE_AUTO, pumpMode = MODE_AUTO;
 
-int buzzerEnable = 1;
-int silenceWaterAlert = 0;
-int feedingEnable = 1;
-String feedTimes[2] = {"09:00","18:00"};
-String lastFeedISO = "";
-int manualFeedRequest = 0;
+// Settings (defaults; will be overwritten from RTDB /settings)
+struct
+{
+  bool presenceRuleEnabled = true;
+  bool lowLightRuleEnabled = true;
+  struct
+  {
+    bool enabled = true;
+    int seconds = 25; // runtime per hour
+  } hourlyPump;
+  // Thresholds
+  int proximity_cm = 20;
+  int low_light_adc = 1700; // adjust based on your LDR divider
+  int water_low_adc = 1200; // higher/lower depends on your probe
+  float high_temp_c = 32.0;
 
-bool lightOn = false, pumpOn = false;
-bool waterLowActive = false, tempHighOnceSent = false;
+  // Feeding
+  bool feedingEnabled = true;
+  String feedTime1 = "08:00";
+  String feedTime2 = "20:00";
 
-unsigned long lastUpload = 0;
-const unsigned long uploadInterval = 1000;
+  // Buzzer
+  bool alertsEnabled = true;
+} settings;
 
-unsigned long presenceLastSeenMs = 0;
-const unsigned long presenceHoldMs = 15000; // keep ON for 15s after last presence
+// Buzzer silence window (epoch seconds)
+time_t buzzerSilencedUntil = 0;
 
-unsigned long pumpStartedMs = 0;
+// Timers
+unsigned long tSensors = 0;
+unsigned long tOLED = 0;
+unsigned long tLog = 0;
+unsigned long tPoll = 0;
+unsigned long tHourly = 0;
+unsigned long tNTPRetry = 0;
+
+const unsigned long SENSORS_MS = 2000;
+const unsigned long OLED_MS = 2000;
+const unsigned long LOG_MS = 60000;
+const unsigned long POLL_MS = 2000;
+
+// Hourly scheduler bookkeeping
 unsigned long lastHourlyPumpMs = 0;
-const unsigned long hourlyMs = 60UL * 60UL * 1000UL;
+bool hourlyPumpRunning = false;
+unsigned long hourlyPumpStopAt = 0;
 
-unsigned long lastWaterAlertBeepMs = 0;
-bool waterAlertBeeping = false;
+// Feeding bookkeeping
+time_t lastFeedEpoch = 0;  // last feed time
+String lastFeedLabel = ""; // which feed time triggered
+bool ntpReady = false;
 
-unsigned long lastTempHighBeepMs = 0;
-bool tempBeepedThisEvent = false;
-
-bool timeSynced = false;
-
-// -------------------- Helpers --------------------
-void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("WiFi");
-  while (WiFi.status() != WL_CONNECTED) { Serial.print("."); delay(300); }
-  Serial.println("\nWiFi OK");
+// -------------------- Helpers ------------------------
+void relayWrite(uint8_t pin, bool on)
+{
+  // Active LOW: LOW = ON
+  digitalWrite(pin, on ? LOW : HIGH);
 }
 
-void initFirebase() {
-  configFB.api_key = API_KEY;
-  configFB.database_url = DATABASE_URL;
-  Firebase.begin(&configFB, &auth);
-  Firebase.reconnectWiFi(true);
+void setLight(bool on)
+{
+  lightOn = on;
+  relayWrite(PIN_LIGHT_RELAY, lightOn);
+}
+void setPump(bool on)
+{
+  pumpOn = on;
+  relayWrite(PIN_PUMP_RELAY, pumpOn);
+}
+void setBuzzer(bool on)
+{
+  buzzerOn = on;
+  digitalWrite(PIN_BUZZER, on ? HIGH : LOW);
+}
 
-  if (Firebase.signUp(&configFB, &auth, "", "")) {
-    signupOK = true;
-    Serial.println("Firebase auth OK");
-  } else {
-    Serial.printf("Firebase auth failed: %s\n", configFB.signer.signupError.message.c_str());
+long median3(long a, long b, long c)
+{
+  if (a > b)
+    std::swap(a, b);
+  if (b > c)
+    std::swap(b, c);
+  if (a > b)
+    std::swap(a, b);
+  return b; // median
+}
+
+int readUltrasonicCM()
+{
+  // Return distance in cm; if timeout, return large value
+  long readings[3];
+  for (int i = 0; i < 3; i++)
+  {
+    digitalWrite(PIN_US_TRIG, LOW);
+    delayMicroseconds(2);
+    digitalWrite(PIN_US_TRIG, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(PIN_US_TRIG, LOW);
+    long dur = pulseIn(PIN_US_ECHO, HIGH, 25000UL); // ~4.3m max
+    if (dur == 0)
+      readings[i] = 99999;
+    else
+      readings[i] = dur / 58; // us to cm
+    delay(10);
   }
+  return (int)median3(readings[0], readings[1], readings[2]);
 }
 
-void initDisplay() {
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDRESS)) {
-    Serial.println("OLED init failed");
-    while (true);
-  }
-  display.clearDisplay();
-  display.display();
-}
-
-void initHW() {
-  dht.begin();
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(SIGNAL_PIN, INPUT);
-  pinMode(LIGHT_SENSOR_PIN, INPUT);
-  pinMode(WATER_LEVEL_PIN, INPUT);
-  pinMode(RELAY_DEVICE1, OUTPUT);
-  pinMode(RELAY_DEVICE2, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-
-  digitalWrite(RELAY_DEVICE1, HIGH); // active-LOW relays -> OFF
-  digitalWrite(RELAY_DEVICE2, HIGH);
-  digitalWrite(BUZZER_PIN, LOW);
-
-  feedServo.attach(SERVO_PIN);
-  feedServo.write(0);
-}
-
-float getDistanceCM() {
-  digitalWrite(TRIG_PIN, LOW); delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
-  return (duration > 0) ? (duration * 0.0343) / 2.0 : 1000.0;
-}
-
-void readSensors() {
-  temperature = dht.readTemperature();
-  humidity = dht.readHumidity();
-  distanceCM = getDistanceCM();
-  soilMoisture = analogRead(SIGNAL_PIN);
-  lightLevel = analogRead(LIGHT_SENSOR_PIN);
-  waterLevel = analogRead(WATER_LEVEL_PIN);
-}
-
-void drawLine(const String &label, const String &val, int &y) {
-  display.setCursor(0, y);
-  display.print(label); display.println(val);
-  y += 10;
-}
-
-void updateDisplay() {
-  display.clearDisplay();
-  display.setTextSize(1); display.setTextColor(SSD1306_WHITE);
-  int y = 0;
-  drawLine("T:", String(temperature,1)+"C H:"+String(humidity,0)+"%", y);
-  drawLine("Dist:", String((int)distanceCM)+"cm", y);
-  drawLine("Light:", String(lightLevel), y);
-  drawLine("Water:", String(waterLevel), y);
-  drawLine("Lgt:"+String(lightOn?"ON":"OFF")+" Pmp:"+String(pumpOn?"ON":"OFF"), "", y);
-  display.display();
-}
-
-void writeBool(const char* path, bool v) {
-  Firebase.RTDB.setInt(&fbdo, path, v?1:0);
-}
-void writeInt(const char* path, int v) {
-  Firebase.RTDB.setInt(&fbdo, path, v);
-}
-void writeFloat(const char* path, float v) {
-  Firebase.RTDB.setFloat(&fbdo, path, v);
-}
-void writeString(const char* path, const String& s) {
-  Firebase.RTDB.setString(&fbdo, path, s);
-}
-
-void uploadSensors() {
-  if (!Firebase.ready() || !signupOK) return;
-  writeFloat("/sensors/temperature", temperature);
-  writeFloat("/sensors/humidity",    humidity);
-  writeFloat("/sensors/distance",    distanceCM);
-  writeInt("/sensors/soilMoisture",  soilMoisture);
-  writeInt("/sensors/lightLevel",    lightLevel);
-  writeInt("/sensors/waterLevel",    waterLevel);
-}
-
-void syncConfig() {
-  if (!Firebase.ready() || !signupOK) return;
-
-  auto getI = [&](const char* p, int &dst){ if(Firebase.RTDB.getInt(&fbdo,p)) dst=fbdo.intData(); };
-  auto getS = [&](const char* p, String &dst){ if(Firebase.RTDB.getString(&fbdo,p)) dst=fbdo.stringData(); };
-
-  getI("/config/thresholds/proximity_cm", proximityCM);
-  getI("/config/thresholds/light_low", lightLowThresh);
-  getI("/config/thresholds/water_low", waterLowThresh);
-  getI("/config/thresholds/temp_high_c", tempHighC);
-
-  getI("/config/light/manual", lightManual);
-  getI("/config/light/auto_presence", lightAutoPresence);
-  getI("/config/light/auto_low_light", lightAutoLow);
-
-  getI("/config/pump/manual", pumpManual);
-  getI("/config/pump/auto_presence", pumpAutoPresence);
-  getI("/config/pump/auto_hourly", pumpAutoHourly);
-  getI("/config/pump/max_on_seconds", pumpMaxOnSec);
-
-  getI("/config/buzzer/enable", buzzerEnable);
-  getI("/config/buzzer/silence_water_alert", silenceWaterAlert);
-
-  getI("/config/feeding/enable", feedingEnable);
-  getS("/config/feeding/times/0", feedTimes[0]);
-  getS("/config/feeding/times/1", feedTimes[1]);
-  getS("/config/feeding/last_feed_iso", lastFeedISO);
-  getI("/config/feeding/manual_feed_request", manualFeedRequest);
-
-  getI("/config/time/tz_offset_minutes", tzOffsetMin);
-  getS("/config/time/ntp_pool", ntpPool);
-}
-
-void setRelay(int pin, bool on) {
-  digitalWrite(pin, on ? LOW : HIGH); // active-LOW
-}
-
-void setLight(bool on) { lightOn = on; setRelay(RELAY_DEVICE1, on); writeBool("/state/light_on", on); }
-void setPump(bool on)  { pumpOn  = on; setRelay(RELAY_DEVICE2, on); writeBool("/state/pump_on",  on); }
-
-void beepFor(unsigned long ms) {
-  digitalWrite(BUZZER_PIN, HIGH);
+void beepMs(uint16_t ms)
+{
+  setBuzzer(true);
   delay(ms);
-  digitalWrite(BUZZER_PIN, LOW);
+  setBuzzer(false);
 }
 
-bool isPresence() {
-  return distanceCM <= proximityCM;
+void feederDispense()
+{
+  // Simple 0->90->0 sweep
+  feeder.write(90);
+  delay(1000);
+  feeder.write(0);
 }
 
-void handlePresenceLogic() {
-  if (isPresence()) presenceLastSeenMs = millis();
-  bool presenceActive = (millis() - presenceLastSeenMs) <= presenceHoldMs;
-
-  // Light: manual OR (auto rules)
-  bool lightDecision = (lightManual == 1);
-  if (!lightDecision) {
-    if (lightAutoPresence && presenceActive) lightDecision = true;
-    if (!lightDecision && lightAutoLow && (lightLevel < lightLowThresh)) lightDecision = true;
+String modeToStr(Mode m)
+{
+  switch (m)
+  {
+  case MODE_AUTO:
+    return "auto";
+  case MODE_MANUAL:
+    return "manual";
+  case MODE_OFF:
+    return "off";
   }
-  setLight(lightDecision);
+  return "auto";
+}
 
-  // Pump: manual OR (presence or hourly logic, hourly handled separately)
-  bool pumpDecision = (pumpManual == 1);
-  if (!pumpDecision && pumpAutoPresence && presenceActive) pumpDecision = true;
+Mode strToMode(const String &s)
+{
+  String a = s;
+  a.toLowerCase();
+  if (a == "manual")
+    return MODE_MANUAL;
+  if (a == "off")
+    return MODE_OFF;
+  return MODE_AUTO;
+}
 
-  // Safety: enforce max run time
-  if (pumpDecision && !pumpOn) {
-    pumpStartedMs = millis();
+String twoDigits(int v) { return (v < 10 ? "0" : "") + String(v); }
+
+String dateStr(time_t t)
+{
+  struct tm lt;
+  localtime_r(&t, &lt);
+  return String(1900 + lt.tm_year) + "-" + twoDigits(1 + lt.tm_mon) + "-" + twoDigits(lt.tm_mday);
+}
+String timeStr(time_t t)
+{
+  struct tm lt;
+  localtime_r(&t, &lt);
+  return twoDigits(lt.tm_hour) + ":" + twoDigits(lt.tm_min) + ":" + twoDigits(lt.tm_sec);
+}
+
+bool isSameDay(time_t a, time_t b)
+{
+  struct tm la, lb;
+  localtime_r(&a, &la);
+  localtime_r(&b, &lb);
+  return (la.tm_year == lb.tm_year && la.tm_yday == lb.tm_yday);
+}
+
+// Parse "HH:MM" and return seconds since midnight
+int parseHHMMtoSec(const String &hhmm)
+{
+  int colon = hhmm.indexOf(':');
+  if (colon < 0)
+    return -1;
+  int h = hhmm.substring(0, colon).toInt();
+  int m = hhmm.substring(colon + 1).toInt();
+  if (h < 0 || h > 23 || m < 0 || m > 59)
+    return -1;
+  return h * 3600 + m * 60;
+}
+
+// -------------------- Firebase paths -----------------
+const char *PATH_SENSORS = "/sensors";
+const char *PATH_STATES = "/states";
+const char *PATH_SETTINGS = "/settings";
+const char *PATH_COMMANDS = "/commands";
+const char *PATH_META = "/meta";
+const char *PATH_LOGS = "/logs/sensors";
+
+// -------------------- Firebase I/O -------------------
+void pushStates()
+{
+  if (!Firebase.ready())
+    return;
+  FirebaseJson json;
+  json.add("light_on", lightOn);
+  json.add("pump_on", pumpOn);
+  json.add("buzzer_on", buzzerOn);
+  json.add("light_mode", modeToStr(lightMode));
+  json.add("pump_mode", modeToStr(pumpMode));
+  Firebase.RTDB.updateNode(&fbdo, PATH_STATES, &json);
+}
+
+void pushSensors()
+{
+  if (!Firebase.ready())
+    return;
+  FirebaseJson j;
+  j.add("temperature_c", gTempC);
+  j.add("humidity_pct", gHum);
+  j.add("light_adc", gLightADC);
+  j.add("water_adc", gWaterADC);
+  j.add("proximity_cm", gProximity);
+  j.add("last_update", (int)time(nullptr));
+  Firebase.RTDB.updateNode(&fbdo, PATH_SENSORS, &j);
+}
+
+void pushMetaFeed(time_t when, const String &label)
+{
+  if (!Firebase.ready())
+    return;
+  FirebaseJson j;
+  j.add("last_feed_time", (int)when);
+  j.add("last_feed_label", label);
+  Firebase.RTDB.updateNode(&fbdo, PATH_META, &j);
+}
+
+void logSensors()
+{
+  if (!Firebase.ready())
+    return;
+  time_t now = time(nullptr);
+  String date = dateStr(now);
+  String ts = String((int)now);
+  String path = String(PATH_LOGS) + "/" + date + "/" + ts;
+  FirebaseJson j;
+  j.add("tC", gTempC).add("h", gHum).add("ldr", gLightADC).add("water", gWaterADC).add("prox_cm", gProximity);
+  Firebase.RTDB.setJSON(&fbdo, path.c_str(), &j);
+}
+
+bool jsonGetBool(FirebaseJson &j, const char *path, bool &out)
+{
+  FirebaseJsonData r;
+  if (j.get(r, path) && r.success && r.typeNum == FirebaseJson::JSON_BOOL)
+  {
+    out = r.to<bool>();
+    return true;
   }
-  if (pumpOn && (millis() - pumpStartedMs > (unsigned long)pumpMaxOnSec*1000UL)) {
-    pumpDecision = false;
-  }
-  setPump(pumpDecision);
-}
-
-void handleHourlyPump() {
-  if (!pumpAutoHourly) return;
-  if (millis() - lastHourlyPumpMs >= hourlyMs) {
-    lastHourlyPumpMs = millis();
-    // Run pump for min( configured max_on_seconds, 30s default )
-    unsigned long runMs = min((unsigned long)pumpMaxOnSec*1000UL, 30000UL);
-    setPump(true);
-    unsigned long start = millis();
-    while (millis() - start < runMs) {
-      delay(10);
-    }
-    setPump(false);
-  }
-}
-
-void handleWaterAlert() {
-  bool low = (waterLevel < waterLowThresh);
-  writeBool("/state/water_low", low);
-  writeBool("/alerts/water_low_active", low);
-
-  if (!buzzerEnable) return;
-  if (silenceWaterAlert) return;
-
-  if (low) {
-    // Repeat short beeps every ~5s until refilled
-    if (millis() - lastWaterAlertBeepMs > 5000) {
-      lastWaterAlertBeepMs = millis();
-      digitalWrite(BUZZER_PIN, HIGH); delay(200);
-      digitalWrite(BUZZER_PIN, LOW);
-    }
-  }
-}
-
-void handleTempAlert() {
-  bool high = (temperature > tempHighC);
-  writeBool("/state/temp_high", high);
-
-  if (!buzzerEnable) return;
-  if (high && !tempBeepedThisEvent) {
-    tempBeepedThisEvent = true;
-    digitalWrite(BUZZER_PIN, HIGH); delay(2000);
-    digitalWrite(BUZZER_PIN, LOW);
-  }
-  if (!high) {
-    tempBeepedThisEvent = false; // reset for next event
-  }
-}
-
-void handleManualBuzzer() {
-  if (buzzerManual == 1) {
-    digitalWrite(BUZZER_PIN, HIGH);
-  } else {
-    if (!waterLowActive) digitalWrite(BUZZER_PIN, LOW); // water alert may toggle it
-  }
-}
-
-time_t nowUTC() { return time(NULL); }
-
-bool sameDay(time_t a, time_t b, int offsetMin) {
-  a += offsetMin*60; b += offsetMin*60;
-  tm ta, tb;
-  gmtime_r(&a, &ta);
-  gmtime_r(&b, &tb);
-  return (ta.tm_year==tb.tm_year && ta.tm_yday==tb.tm_yday);
-}
-
-bool parseHHMM(const String &s, int &hh, int &mm) {
-  int colon = s.indexOf(':');
-  if (colon < 0) return false;
-  hh = s.substring(0, colon).toInt();
-  mm = s.substring(colon+1).toInt();
-  return (hh>=0 && hh<24 && mm>=0 && mm<60);
-}
-
-String isoNowLocal() {
-  time_t t = nowUTC() + tzOffsetMin*60;
-  tm tmL; gmtime_r(&t, &tmL);
-  char buf[32];
-  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tmL);
-  return String(buf);
-}
-
-void doFeed() {
-  // simple rotate to 120°, pause, back to 0°
-  feedServo.write(120); delay(700);
-  feedServo.write(0); delay(500);
-}
-
-bool hasFedTodayAt(const String& HHMM, const String& lastISO) {
-  if (lastISO.length()<10) return false;
-  // we’ll just rely on state machine below instead of deep parsing here.
   return false;
 }
 
-void handleFeeding() {
-  if (!feedingEnable) return;
-  if (!timeSynced) return;
+bool jsonGetInt(FirebaseJson &j, const char *path, int &out)
+{
+  FirebaseJsonData r;
+  if (j.get(r, path) && r.success && (r.typeNum == FirebaseJson::JSON_INT || r.typeNum == FirebaseJson::JSON_FLOAT || r.typeNum == FirebaseJson::JSON_DOUBLE))
+  {
+    out = r.to<int>();
+    return true;
+  }
+  return false;
+}
 
-  // Manual feed
-  if (manualFeedRequest > 0) {
-    doFeed();
-    writeString("/config/feeding/last_feed_iso", isoNowLocal());
-    Firebase.RTDB.setInt(&fbdo, "/config/feeding/manual_feed_request", 0);
+bool jsonGetFloat(FirebaseJson &j, const char *path, float &out)
+{
+  FirebaseJsonData r;
+  if (j.get(r, path) && r.success && (r.typeNum == FirebaseJson::JSON_INT || r.typeNum == FirebaseJson::JSON_FLOAT || r.typeNum == FirebaseJson::JSON_DOUBLE))
+  {
+    out = (float)r.to<double>();
+    return true;
+  }
+  return false;
+}
+
+bool jsonGetString(FirebaseJson &j, const char *path, String &out)
+{
+  FirebaseJsonData r;
+  if (j.get(r, path) && r.success && r.typeNum == FirebaseJson::JSON_STRING)
+  {
+    out = r.to<const char *>();
+    return true;
+  }
+  return false;
+}
+
+void fetchSettings()
+{
+  if (!Firebase.ready())
+    return;
+  if (Firebase.RTDB.getJSON(&fbdo, PATH_SETTINGS))
+  {
+    FirebaseJson *jp = fbdo.to<FirebaseJson *>();
+    if (!jp)
+      return;
+    FirebaseJson &j = *jp;
+
+    bool b;
+    int i;
+    float f;
+    String s;
+
+    if (jsonGetBool(j, "presence_rule", b))
+      settings.presenceRuleEnabled = b;
+    if (jsonGetBool(j, "low_light_rule", b))
+      settings.lowLightRuleEnabled = b;
+    if (jsonGetBool(j, "hourly_pump/enabled", b))
+      settings.hourlyPump.enabled = b;
+    if (jsonGetInt(j, "hourly_pump/seconds", i))
+      settings.hourlyPump.seconds = i;
+
+    if (jsonGetInt(j, "thresholds/proximity_cm", i))
+      settings.proximity_cm = i;
+    if (jsonGetInt(j, "thresholds/low_light_adc", i))
+      settings.low_light_adc = i;
+    if (jsonGetInt(j, "thresholds/water_low_adc", i))
+      settings.water_low_adc = i;
+    if (jsonGetFloat(j, "thresholds/high_temp_c", f))
+      settings.high_temp_c = f;
+
+    if (jsonGetBool(j, "feeding/enabled", b))
+      settings.feedingEnabled = b;
+    if (jsonGetString(j, "feeding/time1", s))
+      settings.feedTime1 = s;
+    if (jsonGetString(j, "feeding/time2", s))
+      settings.feedTime2 = s;
+
+    if (jsonGetBool(j, "buzzer/alerts_enabled", b))
+      settings.alertsEnabled = b;
+
+    if (jsonGetString(j, "light_mode", s))
+      lightMode = strToMode(s);
+    if (jsonGetString(j, "pump_mode", s))
+      pumpMode = strToMode(s);
+  }
+}
+
+void applyCommandsSnapshot()
+{
+  if (!Firebase.ready())
+    return;
+  if (Firebase.RTDB.getJSON(&fbdo, PATH_COMMANDS))
+  {
+    FirebaseJson *jp = fbdo.to<FirebaseJson *>();
+    if (!jp)
+      return;
+    FirebaseJson &j = *jp;
+
+    String s;
+    bool b;
+    int i;
+
+    if (jsonGetString(j, "light_mode", s))
+      lightMode = strToMode(s);
+    if (jsonGetBool(j, "light_manual_state", b) && lightMode == MODE_MANUAL)
+      setLight(b);
+
+    if (jsonGetString(j, "pump_mode", s))
+      pumpMode = strToMode(s);
+    if (jsonGetBool(j, "pump_manual_state", b) && pumpMode == MODE_MANUAL)
+      setPump(b);
+
+    if (jsonGetBool(j, "buzzer_toggle", b) && b)
+    {
+      setBuzzer(!buzzerOn);
+      FirebaseJson ack;
+      ack.add("buzzer_toggle", false);
+      Firebase.RTDB.updateNode(&fbdo, PATH_COMMANDS, &ack);
+    }
+
+    if (jsonGetInt(j, "buzzer_silence_minutes", i) && i > 0)
+    {
+      time_t now = time(nullptr);
+      buzzerSilencedUntil = now + i * 60;
+      FirebaseJson ack;
+      ack.add("buzzer_silence_minutes", 0);
+      Firebase.RTDB.updateNode(&fbdo, PATH_COMMANDS, &ack);
+    }
+
+    if (jsonGetBool(j, "feed_now", b) && b)
+    {
+      feederDispense();
+      time_t now = time(nullptr);
+      lastFeedEpoch = now;
+      lastFeedLabel = "manual";
+      pushMetaFeed(now, lastFeedLabel);
+      FirebaseJson ack;
+      ack.add("feed_now", false);
+      Firebase.RTDB.updateNode(&fbdo, PATH_COMMANDS, &ack);
+    }
+  }
+}
+
+// Stream handler for faster reaction (optional but nice)
+void streamCallback(FirebaseStream data)
+{
+  if (data.dataTypeEnum() == fb_esp_rtdb_data_type_json)
+  {
+    // Same logic as snapshot; simple approach: just call applyCommandsSnapshot()
+    applyCommandsSnapshot();
+  }
+}
+void streamTimeoutCallback(bool timeout)
+{
+  // no-op
+}
+
+// -------------------- OLED ---------------------------
+void drawOLED()
+{
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.print("T:");
+  display.print(isnan(gTempC) ? 0 : gTempC, 1);
+  display.print("C  H:");
+  display.print(isnan(gHum) ? 0 : gHum, 0);
+  display.println("%");
+  display.setCursor(0, 10);
+  display.print("LDR:");
+  display.print(gLightADC);
+  display.setCursor(64, 10);
+  display.print("Water:");
+  display.print(gWaterADC);
+
+  display.setCursor(0, 20);
+  display.print("Prox: ");
+  display.print(gProximity);
+  display.println("cm");
+
+  display.setCursor(0, 30);
+  display.print("Light:");
+  display.print(lightOn ? "ON " : "OFF");
+  display.print(" (");
+  display.print(modeToStr(lightMode));
+  display.print(")");
+
+  display.setCursor(0, 40);
+  display.print("Pump :");
+  display.print(pumpOn ? "ON " : "OFF");
+  display.print(" (");
+  display.print(modeToStr(pumpMode));
+  display.print(")");
+
+  display.setCursor(0, 50);
+  display.print("Buzz: ");
+  display.print(buzzerOn ? "ON" : "OFF");
+
+  display.display();
+}
+
+// -------------------- Automation ---------------------
+void applyAutomation()
+{
+  // Presence & low light
+  bool presence = gProximity <= settings.proximity_cm;
+  bool lowLight = gLightADC <= settings.low_light_adc;
+
+  // LIGHT
+  if (lightMode == MODE_OFF)
+  {
+    setLight(false);
+  }
+  else if (lightMode == MODE_MANUAL)
+  {
+    // state already controlled via commands
+  }
+  else
+  { // AUTO
+    bool shouldOn = (settings.presenceRuleEnabled && presence) ||
+                    (settings.lowLightRuleEnabled && lowLight);
+    setLight(shouldOn);
   }
 
-  // Scheduled feeds (two times)
-  time_t t = nowUTC() + tzOffsetMin*60;
-  tm tl; gmtime_r(&t, &tl);
-  int currHM = tl.tm_hour*60 + tl.tm_min;
-
-  static int lastMinuteChecked = -1;
-  if (lastMinuteChecked == tl.tm_min) return; // run once per minute
-  lastMinuteChecked = tl.tm_min;
-
-  // We’ll record last_feed_iso date; allow two feeds/day by recording last feed time,
-  // and only trigger if we haven’t fed within ±5 minutes window for that HH:MM.
-  String lastISO; 
-  if (Firebase.RTDB.getString(&fbdo, "/config/feeding/last_feed_iso")) {
-    lastISO = fbdo.stringData();
+  // PUMP
+  if (pumpMode == MODE_OFF)
+  {
+    setPump(false);
   }
-  time_t lastFeedUTC = 0;
-  if (lastISO.length() >= 19) {
-    // naive parse YYYY-MM-DDTHH:MM:SS (local)
-    int y = lastISO.substring(0,4).toInt();
-    int m = lastISO.substring(5,7).toInt();
-    int d = lastISO.substring(8,10).toInt();
-    int hh = lastISO.substring(11,13).toInt();
-    int mm = lastISO.substring(14,16).toInt();
-    tm tml = {};
-    tml.tm_year = y - 1900;
-    tml.tm_mon  = m - 1;
-    tml.tm_mday = d;
-    tml.tm_hour = hh;
-    tml.tm_min  = mm;
-    tml.tm_sec  = 0;
-    // mktime assumes local, but our tm is "local already", we just convert back to UTC by subtracting offset:
-    lastFeedUTC = mktime(&tml) - tzOffsetMin*60;
+  else if (pumpMode == MODE_MANUAL)
+  {
+    // state already controlled via commands
+  }
+  else
+  {
+    bool shouldOn = (settings.presenceRuleEnabled && presence);
+    // Hourly pump scheduler adds extra ON window (handled separately)
+    if (!hourlyPumpRunning)
+      setPump(shouldOn);
   }
 
-  auto maybeFeedAt = [&](const String &HHMM) {
-    int fh=0,fm=0; if(!parseHHMM(HHMM, fh, fm)) return;
-    int feedHM = fh*60+fm;
-    if (abs(currHM - feedHM) <= 1) { // minute hits
-      // Have we already fed today at around this time? We allow one feed per schedule per day.
-      if (lastFeedUTC != 0 && sameDay(nowUTC(), lastFeedUTC, tzOffsetMin)) {
-        // already fed today -> skip
-        return;
+  // BUZZER alerts
+  time_t now = time(nullptr);
+  bool withinSilence = now < buzzerSilencedUntil;
+
+  bool waterLow = (gWaterADC <= settings.water_low_adc);
+  bool tempHigh = (!isnan(gTempC) && gTempC > settings.high_temp_c);
+
+  if (settings.alertsEnabled && !withinSilence)
+  {
+    if (waterLow)
+    {
+      // 2 sec chirp
+      beepMs(2000);
+    }
+    else if (tempHigh)
+    {
+      // short beep
+      beepMs(200);
+    }
+  }
+}
+
+// Hourly pump worker
+void hourlyPumpTick()
+{
+  if (!settings.hourlyPump.enabled || pumpMode != MODE_AUTO)
+    return;
+
+  unsigned long nowMs = millis();
+  if (!hourlyPumpRunning)
+  {
+    // start every ~hour (3600000 ms). We allow drift; if Wi-Fi sleep is used it still works.
+    if (nowMs - lastHourlyPumpMs >= 3600000UL)
+    {
+      hourlyPumpRunning = true;
+      setPump(true);
+      hourlyPumpStopAt = nowMs + (unsigned long)settings.hourlyPump.seconds * 1000UL;
+      lastHourlyPumpMs = nowMs;
+    }
+  }
+  else
+  {
+    if ((long)(nowMs - hourlyPumpStopAt) >= 0)
+    {
+      hourlyPumpRunning = false;
+      // Return to presence-controlled state:
+      bool presence = gProximity <= settings.proximity_cm;
+      setPump(settings.presenceRuleEnabled && presence);
+    }
+  }
+}
+
+// Feeding schedule (by NTP local time)
+void feedingTick()
+{
+  if (!settings.feedingEnabled || !ntpReady)
+    return;
+
+  time_t now = time(nullptr);
+  struct tm lt;
+  localtime_r(&now, &lt);
+  int secMidnight = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec;
+
+  auto maybeFeed = [&](const String &label, const String &hhmm)
+  {
+    int target = parseHHMMtoSec(hhmm);
+    if (target < 0)
+      return;
+    // Trigger when within 10 seconds after the target sec, once per day per label
+    if (secMidnight >= target && secMidnight <= target + 10)
+    {
+      // Ensure not already fed at this label today
+      if (!isSameDay(now, lastFeedEpoch) || lastFeedLabel != label)
+      {
+        feederDispense();
+        lastFeedEpoch = now;
+        lastFeedLabel = label;
+        pushMetaFeed(now, label);
       }
-      // short beep before feed
-      if (buzzerEnable) { digitalWrite(BUZZER_PIN, HIGH); delay(200); digitalWrite(BUZZER_PIN, LOW); }
-      doFeed();
-      String iso = isoNowLocal();
-      writeString("/config/feeding/last_feed_iso", iso);
     }
   };
 
-  maybeFeedAt(feedTimes[0]);
-  maybeFeedAt(feedTimes[1]);
+  maybeFeed("feed1", settings.feedTime1);
+  maybeFeed("feed2", settings.feedTime2);
 }
 
-void handleControls() {
-  if (!Firebase.ready() || !signupOK) return;
-  // Read GUI toggles (for quick manual actions)
-  int v;
-  if (Firebase.RTDB.getInt(&fbdo, "/controls/light"))  { v=fbdo.intData(); setLight(v==1); }
-  if (Firebase.RTDB.getInt(&fbdo, "/controls/pump"))   { v=fbdo.intData(); setPump(v==1);  }
-  if (Firebase.RTDB.getInt(&fbdo, "/controls/buzzer")) { v=fbdo.intData(); digitalWrite(BUZZER_PIN, v==1?HIGH:LOW); }
-}
-
-void syncTime() {
-  configTime(0, 0, ntpPool.c_str(), "time.nist.gov");
-  Serial.print("Syncing time");
-  for (int i=0;i<20;i++) {
-    time_t t = nowUTC();
-    if (t > 1700000000) { timeSynced = true; break; } // sanity check
-    Serial.print("."); delay(500);
+// -------------------- Setup & Loop -------------------
+void connectWiFi()
+{
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("WiFi connecting");
+  int dots = 0;
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+    if (++dots > 60)
+      break;
   }
-  Serial.println(timeSynced ? " OK" : " failed (will retry later)");
+  Serial.println();
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
+
+  pinMode(PIN_US_TRIG, OUTPUT);
+  pinMode(PIN_US_ECHO, INPUT);
+
+  pinMode(PIN_LDR, INPUT);
+  pinMode(PIN_WATER, INPUT);
+  pinMode(PIN_SPARE_ADC, INPUT);
+
+  pinMode(PIN_LIGHT_RELAY, OUTPUT);
+  pinMode(PIN_PUMP_RELAY, OUTPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
+  setLight(false);
+  setPump(false);
+  setBuzzer(false);
+
+  dht.begin();
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+  display.clearDisplay();
+  display.display();
+
+  feeder.attach(PIN_SERVO, 500, 2400);
+  feeder.write(0);
+
   connectWiFi();
-  initHW();
-  initDisplay();
-  initFirebase();
-  syncConfig();
-  syncTime();
-}
+  configTime(GMT_OFFSET_SEC, DST_OFFSET_SEC, "pool.ntp.org", "time.nist.gov");
+  // We'll check ntpReady in loop after time sync
 
-void loop() {
-  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  // Firebase config
+  configFB.api_key = API_KEY;
+  configFB.database_url = DATABASE_URL;
+  configFB.token_status_callback = tokenStatusCallback;
 
-  // Pull config & ad-hoc controls periodically
-  static unsigned long lastCfgMs = 0;
-  if (millis() - lastCfgMs > 2000) { lastCfgMs = millis(); syncConfig(); handleControls(); }
-
-  readSensors();
-  updateDisplay();
-
-  // Core automations
-  handlePresenceLogic(); // presence + low-light + pump safety
-  handleHourlyPump();    // hourly short run
-  handleWaterAlert();    // repeating until refilled (unless silenced)
-  handleTempAlert();     // one-time 2s beep on high temp
-  handleManualBuzzer();  // respect manual buzzer on/off
-  handleFeeding();       // scheduled + manual feed
-
-  // Upload telemetry
-  if (millis() - lastUpload >= uploadInterval) {
-    lastUpload = millis();
-    uploadSensors();
+  // Anonymous sign-up
+  if (Firebase.signUp(&configFB, &auth, "", ""))
+  {
+    Serial.println("Firebase signUp OK");
+  }
+  else
+  {
+    Serial.printf("Firebase signUp error: %s\n", configFB.signer.signupError.message.c_str());
   }
 
-  delay(50);
+  Firebase.begin(&configFB, &auth);
+  Firebase.reconnectWiFi(true);
+  Firebase.setDoubleDigits(3);
+
+  // Stream commands for instant response
+  if (!Firebase.RTDB.beginStream(&stream, PATH_COMMANDS))
+  {
+    Serial.printf("Stream begin error: %s\n", stream.errorReason().c_str());
+  }
+  else
+  {
+    Firebase.RTDB.setStreamCallback(&stream, streamCallback, streamTimeoutCallback);
+  }
+
+  // First pulls
+  fetchSettings();
+  applyCommandsSnapshot();
+}
+
+void loop()
+{
+  unsigned long nowMs = millis();
+
+  // NTP ready check (only once)
+  if (!ntpReady && nowMs - tNTPRetry > 2000)
+  {
+    tNTPRetry = nowMs;
+    time_t now = time(nullptr);
+    if (now > 1700000000)
+    { // after ~2023
+      ntpReady = true;
+      Serial.println("NTP time is ready.");
+    }
+  }
+
+  // Read sensors + OLED + automation
+  if (nowMs - tSensors >= SENSORS_MS)
+  {
+    tSensors = nowMs;
+
+    gProximity = readUltrasonicCM();
+
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (!isnan(t))
+      gTempC = t;
+    if (!isnan(h))
+      gHum = h;
+
+    gLightADC = analogRead(PIN_LDR);
+    gWaterADC = analogRead(PIN_WATER);
+
+    applyAutomation();
+    pushSensors(); // also keeps dashboard fresh
+    pushStates();
+  }
+
+  if (nowMs - tOLED >= OLED_MS)
+  {
+    tOLED = nowMs;
+    drawOLED();
+  }
+
+  if (nowMs - tLog >= LOG_MS)
+  {
+    tLog = nowMs;
+    logSensors();
+  }
+
+  if (nowMs - tPoll >= POLL_MS)
+  {
+    tPoll = nowMs;
+    // Periodic safety fetch of settings and commands
+    fetchSettings();
+    applyCommandsSnapshot();
+  }
+
+  hourlyPumpTick();
+  feedingTick();
 }
