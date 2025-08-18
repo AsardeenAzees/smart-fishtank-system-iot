@@ -278,7 +278,7 @@ Example embeds already included at the top of this README:
 
 ## 📝 License
 
-This project is released by Azees Asardeen under the **MIT License**. See `LICENSE` file (@2025.08.19).
+This project is released by © Azees Asardeen under the **MIT License**. Launch on: 2025.08.19 01:30AM at Home.
 
 ---
 
