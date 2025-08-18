@@ -58,7 +58,7 @@
       border: 1px solid var(--border);
       border-radius: 14px;
       padding: 16px;
-      box-shadow: 0 10px 30px #00000040
+      box-shadow: 0 10px 30px #0006
     }
 
     .card h2 {
@@ -86,16 +86,23 @@
     }
 
     .btn {
-      padding: 8px 12px;
+      padding: 9px 12px;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: #0b213a;
       color: #e8f2ff;
-      cursor: pointer
+      cursor: pointer;
+      transition: transform .04s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease, color .15s ease;
+      user-select: none;
+      touch-action: manipulation
     }
 
     .btn:hover {
-      background: #0d2a49
+      background: #0e2948
+    }
+
+    .btn:active {
+      transform: translateY(1px)
     }
 
     .btn.ok {
@@ -114,21 +121,46 @@
     }
 
     .btn.ghost {
-      background: transparent
+      background: transparent;
+      color: var(--muted)
     }
 
-    .switch {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      color: var(--muted)
+    .btn[disabled] {
+      opacity: .45;
+      cursor: not-allowed;
+      filter: grayscale(.15)
+    }
+
+    /* ACTIVE STATE HIGHLIGHT */
+    .btn.active {
+      background: #122e4f;
+      border-color: #2b86c9;
+      box-shadow: 0 0 0 2px #2b86c955 inset, 0 0 24px #0ea5e955;
+      color: #e6f3ff;
+    }
+
+    .btn.ok.active {
+      background: #134136;
+      border-color: #2ea585;
+      box-shadow: 0 0 0 2px #2ea58555 inset, 0 0 24px #2ea58555
+    }
+
+    .btn.warn.active {
+      background: #43330f;
+      border-color: #d7a125;
+      box-shadow: 0 0 0 2px #d7a12555 inset, 0 0 24px #d7a12555
+    }
+
+    .btn.bad.active {
+      background: #451515;
+      border-color: #ef4444;
+      box-shadow: 0 0 0 2px #ef444455 inset, 0 0 24px #ef444455
     }
 
     input[type="number"],
     input[type="text"] {
       width: 100%;
-      padding: 8px 10px;
+      padding: 9px 10px;
       border-radius: 10px;
       border: 1px solid var(--border);
       background: #0b213a;
@@ -188,10 +220,6 @@
     .muted {
       color: var(--muted)
     }
-
-    .danger {
-      color: var(--bad)
-    }
   </style>
 </head>
 
@@ -223,36 +251,52 @@
       <hr />
       <div class="k"><span>Light Mode</span><b id="lightMode" class="tag">—</b></div>
       <div class="k"><span>Pump Mode</span><b id="pumpMode" class="tag">—</b></div>
+      <div class="k"><span>Buzzer Mode</span><b id="buzzerMode" class="tag">—</b></div>
     </section>
 
     <!-- Controls -->
     <section class="card">
       <h2>Controls</h2>
+      <!-- Light mode -->
       <div class="row">
-        <button id="lightAuto" class="btn">Light: AUTO</button>
-        <button id="lightManual" class="btn">MANUAL</button>
-        <button id="lightOff" class="btn">OFF</button>
+        <button id="lightAuto" class="btn" aria-pressed="false">Light: AUTO</button>
+        <button id="lightManual" class="btn" aria-pressed="false">MANUAL</button>
+        <button id="lightOff" class="btn" aria-pressed="false">OFF</button>
       </div>
+      <!-- Light manual toggle -->
       <div class="row">
-        <button id="lightOn" class="btn ok">Light ON</button>
-        <button id="lightOff2" class="btn">Light OFF</button>
+        <button id="lightOn" class="btn ok" aria-pressed="false">Light ON</button>
+        <button id="lightOff2" class="btn" aria-pressed="false">Light OFF</button>
       </div>
+
       <hr />
+
+      <!-- Pump mode -->
       <div class="row">
-        <button id="pumpAuto" class="btn">Pump: AUTO</button>
-        <button id="pumpManual" class="btn">MANUAL</button>
-        <button id="pumpOff" class="btn">OFF</button>
+        <button id="pumpAuto" class="btn" aria-pressed="false">Pump: AUTO</button>
+        <button id="pumpManual" class="btn" aria-pressed="false">MANUAL</button>
+        <button id="pumpOff" class="btn" aria-pressed="false">OFF</button>
       </div>
+      <!-- Pump manual toggle -->
       <div class="row">
-        <button id="pumpOn" class="btn ok">Pump ON</button>
-        <button id="pumpOff2" class="btn">Pump OFF</button>
+        <button id="pumpOn" class="btn ok" aria-pressed="false">Pump ON</button>
+        <button id="pumpOff2" class="btn" aria-pressed="false">Pump OFF</button>
       </div>
+
       <hr />
+
+      <!-- Buzzer mode -->
       <div class="row">
-        <button id="buzzToggle" class="btn warn">Buzzer Toggle</button>
+        <button id="buzzFeedOnly" class="btn warn" aria-pressed="false">Buzzer: Feed-Only</button>
+        <button id="buzzNormal" class="btn" aria-pressed="false">Buzzer: Normal</button>
+      </div>
+      <!-- Legacy buzzer cmds -->
+      <div class="row">
+        <button id="buzzToggle" class="btn">Buzzer Toggle</button>
         <input id="buzzSilenceMin" type="number" min="1" placeholder="Silence minutes" />
         <button id="buzzSilenceBtn" class="btn">Silence</button>
       </div>
+
       <div class="row">
         <button id="feedNow" class="btn ok">Feed Now</button>
       </div>
@@ -323,10 +367,10 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-app.js";
-    import { getDatabase, ref, onValue, update, set, get, query, limitToLast } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-database.js";
+    import { getDatabase, ref, onValue, update, set, get } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-database.js";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.1/firebase-auth.js";
 
-    // ==== 1) REPLACE WITH YOUR PROJECT CONFIG ====
+    // ====== REPLACE WITH YOUR PROJECT CONFIG ======
     const firebaseConfig = {
       apiKey: "AIzaSyCPokWLKrM-JbJgQL0vVDccdR-qrmAHQ_Q",
       authDomain: "fishtank-system.firebaseapp.com",
@@ -337,7 +381,7 @@
       appId: "1:333858962529:web:87ea50878e00d4bdd8be20",
       measurementId: "G-67L85BD3S8"
     };
-    // ============================================
+    // =============================================
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
@@ -348,9 +392,23 @@
     onAuthStateChanged(auth, (u) => { if (u) { document.getElementById('uid').textContent = u.uid; } });
 
     // Helpers
-    const $ = id => document.getElementById(id);
+    const $ = (id) => document.getElementById(id);
     const asTime = (s) => s ? new Date(s * 1000).toLocaleString() : "—";
-    const setPill = (el, on) => { el.textContent = on ? "ON" : "OFF"; el.style.borderColor = on ? "#1a5847" : "var(--border)" }
+    const setPill = (el, on) => { el.textContent = on ? "ON" : "OFF"; el.style.borderColor = on ? "#1a5847" : "var(--border)"; };
+    const setDisabled = (ids, dis) => ids.forEach(id => {
+      const el = $(id); if (!el) return;
+      el.disabled = dis;
+      el.classList.toggle('ghost', dis);
+      el.setAttribute('aria-pressed', el.classList.contains('active') && !dis ? 'true' : 'false');
+      if (dis) el.classList.remove('active'); // when disabled, ensure not highlighted
+    });
+    const markActiveOne = (ids, activeId) => ids.forEach(id => {
+      const el = $(id); if (!el) return;
+      const on = (id === activeId);
+      el.classList.toggle('active', on);
+      el.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const clearActive = (ids) => ids.forEach(id => { const el = $(id); if (el) { el.classList.remove('active'); el.setAttribute('aria-pressed', 'false'); } });
 
     // Live sensors
     onValue(ref(db, '/sensors'), snap => {
@@ -363,21 +421,50 @@
       $('updated').textContent = asTime(v.last_update);
     });
 
-    // Live states
+    // Live states + ACTIVE BUTTON SYNC
     onValue(ref(db, '/states'), snap => {
       const v = snap.val() || {};
+
+      // pills
       setPill($('lightState'), !!v.light_on);
       setPill($('pumpState'), !!v.pump_on);
       setPill($('buzzState'), !!v.buzzer_on);
-      $('lightMode').textContent = v.light_mode || 'auto';
-      $('pumpMode').textContent = v.pump_mode || 'auto';
 
-      // Enable/disable manual buttons depending on mode
+      // text tags
       const lm = (v.light_mode || 'auto');
       const pm = (v.pump_mode || 'auto');
-      const setDis = (ids, dis) => ids.forEach(id => { $(id).disabled = dis; $(id).classList.toggle('ghost', dis); });
-      setDis(['lightOn', 'lightOff2'], lm !== 'manual');
-      setDis(['pumpOn', 'pumpOff2'], pm !== 'manual');
+      const bm = (v.buzzer_mode || 'normal');
+      $('lightMode').textContent = lm;
+      $('pumpMode').textContent = pm;
+      $('buzzerMode').textContent = bm;
+
+      // highlight Light mode buttons
+      const lightModeBtn = { auto: 'lightAuto', manual: 'lightManual', off: 'lightOff' }[lm] || 'lightAuto';
+      markActiveOne(['lightAuto', 'lightManual', 'lightOff'], lightModeBtn);
+
+      // highlight Pump mode buttons
+      const pumpModeBtn = { auto: 'pumpAuto', manual: 'pumpManual', off: 'pumpOff' }[pm] || 'pumpAuto';
+      markActiveOne(['pumpAuto', 'pumpManual', 'pumpOff'], pumpModeBtn);
+
+      // highlight Buzzer mode buttons
+      const buzBtn = (bm === 'feed_only') ? 'buzzFeedOnly' : 'buzzNormal';
+      markActiveOne(['buzzFeedOnly', 'buzzNormal'], buzBtn);
+
+      // enable/disable + highlight manual ON/OFF based on mode
+      setDisabled(['lightOn', 'lightOff2'], lm !== 'manual');
+      setDisabled(['pumpOn', 'pumpOff2'], pm !== 'manual');
+
+      if (lm === 'manual') {
+        markActiveOne(['lightOn', 'lightOff2'], v.light_on ? 'lightOn' : 'lightOff2');
+      } else {
+        clearActive(['lightOn', 'lightOff2']);
+      }
+
+      if (pm === 'manual') {
+        markActiveOne(['pumpOn', 'pumpOff2'], v.pump_on ? 'pumpOn' : 'pumpOff2');
+      } else {
+        clearActive(['pumpOn', 'pumpOff2']);
+      }
     });
 
     // Settings live load
@@ -406,46 +493,53 @@
     // Controls → /commands
     const cmdRef = ref(db, '/commands');
 
+    // Light mode
     $('lightAuto').onclick = () => update(cmdRef, { light_mode: 'auto' });
     $('lightManual').onclick = () => update(cmdRef, { light_mode: 'manual' });
     $('lightOff').onclick = () => update(cmdRef, { light_mode: 'off' });
+    // Light manual state
     $('lightOn').onclick = () => update(cmdRef, { light_manual_state: true });
     $('lightOff2').onclick = () => update(cmdRef, { light_manual_state: false });
 
+    // Pump mode
     $('pumpAuto').onclick = () => update(cmdRef, { pump_mode: 'auto' });
     $('pumpManual').onclick = () => update(cmdRef, { pump_mode: 'manual' });
     $('pumpOff').onclick = () => update(cmdRef, { pump_mode: 'off' });
+    // Pump manual state
     $('pumpOn').onclick = () => update(cmdRef, { pump_manual_state: true });
     $('pumpOff2').onclick = () => update(cmdRef, { pump_manual_state: false });
 
+    // Buzzer mode
+    $('buzzFeedOnly').onclick = () => update(cmdRef, { buzzer_mode: 'feed_only' });
+    $('buzzNormal').onclick = () => update(cmdRef, { buzzer_mode: 'normal' });
+
+    // Legacy buzzer controls
     $('buzzToggle').onclick = () => update(cmdRef, { buzzer_toggle: true });
     $('buzzSilenceBtn').onclick = () => {
       const mins = parseInt($('buzzSilenceMin').value || "0", 10);
       if (mins > 0) update(cmdRef, { buzzer_silence_minutes: mins });
     };
 
+    // Feed Now
     $('feedNow').onclick = () => update(cmdRef, { feed_now: true });
 
     // Save settings
     $('saveSettings').onclick = () => {
-      update(ref(db, '/settings'), {
+      const up = {
         thresholds: {
-          proximity_cm: parseInt($('thrProx').value, 10),
-          low_light_adc: parseInt($('thrLdr').value, 10),
-          water_low_adc: parseInt($('thrWater').value, 10),
-          high_temp_c: parseFloat($('thrTemp').value)
+          proximity_cm: parseInt($('thrProx').value || "20", 10),
+          low_light_adc: parseInt($('thrLdr').value || "1700", 10),
+          water_low_adc: parseInt($('thrWater').value || "1200", 10),
+          high_temp_c: parseFloat($('thrTemp').value || "32")
         },
-        hourly_pump: { seconds: parseInt($('hourlySecs').value, 10) }
-      });
-      alert('Settings saved');
+        hourly_pump: { seconds: parseInt($('hourlySecs').value || "25", 10) }
+      };
+      update(ref(db, '/settings'), up);
     };
 
     $('saveFeeding').onclick = () => {
-      update(ref(db, '/settings/feeding'), {
-        time1: $('feed1').value.trim(),
-        time2: $('feed2').value.trim()
-      });
-      alert('Feeding times saved');
+      const up = { feeding: { time1: $('feed1').value, time2: $('feed2').value } };
+      update(ref(db, '/settings'), up);
     };
 
     // Logs (today)
@@ -456,12 +550,10 @@
     async function loadLogs() {
       const today = ymd(new Date());
       const base = `/logs/sensors/${today}`;
-      // We can't orderByKey & limit reliably on RTDB subtrees with unknown keys via REST here,
-      // but we can read the node once and then slice last N entries.
       const snap = await get(ref(db, base));
       const val = snap.val() || {};
-      const keys = Object.keys(val).sort(); // timestamps ascending
-      const last = keys.slice(-30); // last ~30 entries
+      const keys = Object.keys(val).sort(); // timestamps asc
+      const last = keys.slice(-30);
       const lines = last.map(k => {
         const v = val[k];
         return `${new Date(parseInt(k, 10) * 1000).toLocaleTimeString()}  tC=${v.tC}  h=${v.h}  ldr=${v.ldr}  water=${v.water}  prox=${v.prox_cm}`;
